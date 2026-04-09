@@ -12,7 +12,7 @@
             const params = new URLSearchParams({
                 'grant_type': 'client_credentials',
                 'client_id': 'weather-service',
-                'client_secret': 'kkg-xxx-xxx-xxx' // Replace with your actual client secret
+                'client_secret': '1PGyWryu26r0pFrbdeGiS0pK1cEJB' // Replace with your actual client secret
             });
 
             const tokenRes = await fetch('http://localhost:8080/realms/demo-realm/protocol/openid-connect/token', {
@@ -27,8 +27,6 @@
                 console.error("Keycloak Error:", tokenData); // This will show why the secret failed
                 return;
             }
-
-            console.log("Token received!");
 
             const weatherRes = await fetch('http://localhost:5146/weatherforecast', {
                 headers: { 'Authorization': `Bearer ${tokenData.access_token}` }

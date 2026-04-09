@@ -18,7 +18,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             // Service accounts often don't have a standard 'Audience' 
             // unless configured in 'Client Scopes' in Keycloak.
             ValidateAudience = false,
-            ValidateIssuer = false
+            ValidateIssuer = true
         };
     });
 

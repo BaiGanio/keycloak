@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>User Weather Portal</title>
+    <!-- Load Keycloak JS from your local server -->
+  
+    <script src="https://cdn.jsdelivr.net/npm/keycloak-js@24.0.0/dist/keycloak.min.js"></script>
+
+
+</head>
+<body style="font-family: sans-serif; padding: 20px;">
+    <h1>User Weather Portal (PKCE)</h1>
+    <div id="user-info"></div>
+    <hr>
+    <div id="content">
+        <button id="login-btn" style="display:none;" onclick="keycloak.login()">Log In to See Weather</button>
+        <button id="fetch-btn" style="display:none;" onclick="fetchWeather()">Get Weather Data</button>
+        <div id="weather-output"></div>
+    </div>
+
+    <script>
+        const keycloak = new Keycloak({
+            url: 'http://192.168.0.104:8080',
+            realm: 'demo-realm',
+            clientId: 'weather-user-spa'
+        });
+
+        keycloak.init({ 
+            onLoad: 'check-sso', 
+            pkceMethod: 'S256' 
+        }).then(authenticated => {
+            if (!authenticated) {
+                document.getElementById('login-btn').style.display = 'block';
+            } else {
+                document.getElementById('fetch-btn').style.display = 'block';
+                document.getElementById('user-info').innerHTML = `
+                    <p>Logged in as: <strong>${keycloak.tokenParsed.preferred_username}</strong></p>
+                    <button onclick="keycloak.logout()">Logout</button>
+                `;
+            }
+        });
+
+        async function fetchWeather() {
+            const response = await fetch('http://localhost:5146/weatherforecast', {
+                headers: { 'Authorization': `Bearer ${keycloak.token}` }
+            });
+
+            if (response.status === 401) {
+                alert("Unauthorized! Your user might not have permission.");
+                return;
+            }
+
+            const data = await response.json();
+            document.getElementById('weather-output').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+    </script>
+</body>
+</html>
