@@ -1,139 +1,279 @@
-# keycloak
+# Keycloak backbone
 
-> - Keycloak's UI is server-rendered and stateful.   
-> - The admin console and login pages are served by the Keycloak server process itself — they're not a standalone SPA you can host separately.    
-> - They require the Keycloak backend to function.
+This repository is a starting point for a shared Keycloak identity service that
+can support multiple applications. The target environments are being developed
+and documented in this order:
 
-### How to use it:
+1. local development with Docker Compose;
+2. Azure;
+3. k3s on Raspberry Pi 5.
+
+Only the local Docker workflow is documented as a usable path today. The Azure
+template is an early draft, and there is not yet a k3s deployment in the
+repository.
+
+## Repository contents
+
+| Path | Purpose | Status |
+| --- | --- | --- |
+| `docker-compose.yml` | Runs one Keycloak server for local development | Usable for local experiments |
+| `main.bicep` | Azure Container Apps and PostgreSQL experiment | Draft; not production-ready |
+
+## Architecture
+
+Keycloak owns login, sessions, users, roles, and token issuance. Applications
+redirect users to Keycloak for authentication and APIs validate the access
+tokens that Keycloak issues.
+
+```mermaid
+flowchart LR
+    browser["Browser application"]
+    keycloak["Keycloak<br/>Login · Sessions · Tokens"]
+    api["Protected API"]
+    database[("Identity database")]
+
+    browser -- "OIDC authorization redirect" --> keycloak
+    keycloak -- "ID and access tokens" --> browser
+    browser -- "Bearer access token" --> api
+    api -. "Issuer and signing-key validation" .-> keycloak
+    keycloak <--> database
+```
+
+Keycloak's login pages and Admin Console are served by Keycloak itself. They are
+not a standalone frontend that can be hosted separately.
+
+## Local development with Docker
+
+### Prerequisites
+
+- Docker Desktop, Docker Engine with the Compose plugin, or an equivalent
+  Docker-compatible environment
+- Docker Compose v2 (`docker compose`, not the legacy `docker-compose` command)
+- port `8080` available on the host
+
+Confirm that Docker is running:
+
+```bash
+docker info
+docker compose version
+```
+
+### Start Keycloak
+
+From the repository root:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f keycloak
+```
+
+Wait for the log message that says Keycloak has started, then open:
+
+- Admin Console: <http://localhost:8080/admin/>
+- OpenID Connect discovery document:
+  <http://localhost:8080/realms/master/.well-known/openid-configuration>
+
+The development bootstrap credentials currently defined in
+`docker-compose.yml` are:
+
 ```text
-[Your App / GitHub Pages SPA]
-        ↓  (OIDC/OAuth2 redirects)
-[Keycloak Server on Azure Container Instances / App Service]
-        ↓
-[Azure Database for PostgreSQL]
+username: admin
+password: admin
 ```
 
-- Keycloak handles auth, sessions, and the UI
-- Your actual frontend app can live on GitHub Pages
-- The DB is managed by Azure
+### Temporary bootstrap administrator
 
-### Why this setup?
-- PostgreSQL: Keycloak is stateless by default. Without a real database in Azure, your users and realms would vanish every time the container restarts.
-- start-edge: This tells Keycloak it's behind a proxy (Azure's Ingress), which handles the SSL/HTTPS for you.
-- Cost: Using the "Burstable" B1ms tier for Postgres and Container Apps keeps your monthly Azure bill low for dev/test scenarios.
+After logging in as `admin`, Keycloak displays this message:
 
----
+> You are logged in as a temporary admin user. To harden security, create a
+> permanent admin account and delete the temporary one.
 
-### Deploy to Azure (Production) 
-```text
-┌─────────────────────┐     OIDC/OAuth2      ┌──────────────────────────┐
-│  Your Frontend SPA  │ ──────────────────▶  │  Keycloak (Azure CI/ACI) │
-│  (GitHub Pages)     │ ◀──────────────────  │  + PostgreSQL (Azure DB) │
-└─────────────────────┘   tokens/redirects   └──────────────────────────┘
-```
+This is expected. `KC_BOOTSTRAP_ADMIN_USERNAME` and
+`KC_BOOTSTRAP_ADMIN_PASSWORD` create a full-access account whose purpose is to
+bootstrap or recover administrator access. "Temporary" is an account
+classification and does not mean that it will expire after a few minutes.
 
-For a production setup in Azure, you have three primary options:
-- Azure Container Apps (Easiest): Deploy the Keycloak container directly. It's serverless and scales automatically. Use Azure Database for PostgreSQL for persistent storage, as the default local database will lose data on restarts.
-- Azure App Service: Similar to Container Apps, but better if you prefer the standard Web App management experience. Ensure you set the KC_HOSTNAME environment variable to your custom domain or the .azurewebsites.net URL.
-- Azure Kubernetes Service (AKS): Best for complex, high-availability needs, managed via Helm charts. 
+For this disposable local environment, it is acceptable to keep using the
+temporary `admin` account while experimenting. Do not keep it for a persistent,
+shared, or production environment.
 
+To replace it with a permanent server administrator:
 
-> Install Azure CLI: Open your terminal and run brew install azure-cli (since you're on a Mac).   
-> Login: Run az login.   
-1. Create a Resource Group:
+1. Log in with `admin` and make sure the current realm is **master**.
+2. Open **Users**, choose **Add user**, enter a new administrator username, and
+   create the user.
+3. Open the new user's **Credentials** tab and set a strong password with
+   **Temporary** set to **Off**.
+4. Open **Role mapping**, choose **Assign role**, filter by realm roles, and
+   assign the `admin` role.
+5. Log out and verify that the new account can sign in to the Admin Console and
+   manage realms.
+6. Only after that verification, sign in with the new account and delete the
+   temporary `admin` user.
+
+The current Compose setup has no persistent volume. If the container is removed,
+both the permanent administrator and all other configuration are lost. A fresh
+container will create the temporary bootstrap `admin` again. Add the development
+volume described below before investing in configuration that must survive
+`docker compose down`.
+
+You can also check that the HTTP endpoint is responding without opening a
+browser:
+
 ```bash
-az group create \
-  --name rg-keycloak-prod \
-  --location east-europe
+curl --fail \
+  http://localhost:8080/realms/master/.well-known/openid-configuration
 ```
-2. Generate Strong Passwords
+
+The first startup can take longer while Docker downloads the image and Keycloak
+initializes its local database.
+
+### Container lifecycle
+
+Run these commands from the repository root:
+
+| Task | Command |
+| --- | --- |
+| Show status | `docker compose ps` |
+| Follow logs | `docker compose logs -f keycloak` |
+| Stop without removing the container | `docker compose stop` |
+| Start a stopped container | `docker compose start` |
+| Restart Keycloak | `docker compose restart keycloak` |
+| Remove the container and Compose network | `docker compose down` |
+| Pull the configured image and recreate | `docker compose pull && docker compose up -d` |
+
+Press `Ctrl+C` to stop following logs. Because Keycloak is started in detached
+mode, this does not stop the server.
+
+### Data persistence and reset behavior
+
+The current Compose service does not mount a volume. Keycloak's development
+database therefore lives in the container's writable layer:
+
+- `docker compose stop` followed by `docker compose start` keeps the data;
+- `docker compose down` removes the container and loses locally created realms,
+  clients, users, and settings;
+- recreating or replacing the container can also lose that data.
+
+This behavior is useful for quick, disposable tests. For local configuration
+that must survive container recreation, add a named volume:
+
+```yaml
+services:
+  keycloak:
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+
+volumes:
+  keycloak_data:
+```
+
+The embedded `dev-file` database and this volume pattern are for development
+only. Azure and k3s deployments will use PostgreSQL and an explicit backup and
+recovery strategy.
+
+To reset a setup that uses the named volume, remove the stack and its volumes:
+
 ```bash
-# PostgreSQL password (32+ characters, mixed case, numbers, symbols)
-postgres_password=$(openssl rand -base64 32)
-
-# Keycloak admin password
-keycloak_password=$(openssl rand -base64 32)
-
-echo "PostgreSQL: $postgres_password"
-echo "Keycloak: $keycloak_password"
+docker compose down --volumes
 ```
-3. Deploy Bicep Template:
-  - Save the code above as main.bicep and run:
+
+This permanently deletes the local Keycloak data in that Compose project.
+
+### Local security boundaries
+
+The Compose configuration deliberately favors convenience and must not be used
+as a production deployment:
+
+- `start-dev` enables development-mode defaults;
+- the bootstrap administrator password is public and trivial;
+- HTTP is used instead of HTTPS;
+- `8080:8080` may publish Keycloak on every host network interface, depending
+  on the Docker environment and host firewall;
+- `quay.io/keycloak/keycloak:latest` is a moving image tag, so a pull can
+  introduce an unplanned upgrade;
+- there is no external database, backup, health check, resource limit, or
+  production proxy configuration.
+
+To restrict the development port to the host machine, change the port mapping
+in `docker-compose.yml` to:
+
+```yaml
+ports:
+  - "127.0.0.1:8080:8080"
+```
+
+Before the Azure and k3s work begins, the image must also be pinned to an
+explicit, tested Keycloak version.
+
+### Troubleshooting
+
+**Docker cannot connect to the daemon**
+
+Start Docker Desktop or the Docker service, then retry `docker info`.
+
+**Port 8080 is already in use**
+
+Find the process or container using the port, or change the host side of the
+mapping, for example `127.0.0.1:8180:8080`. If the port changes, use
+`http://localhost:8180` in local application configuration.
+
+**Keycloak exits during startup**
+
+Inspect the complete logs and the resolved Compose configuration:
+
 ```bash
-az deployment group create \
-  az deployment group create \
-  --name keycloak-deployment \
-  --resource-group rg-keycloak-prod \
-  --template-file main.bicep \
-  --parameters \
-    postgresAdminPassword="$postgres_password" \
-    keycloakAdminPassword="$keycloak_password" \
-    location=eastus \
-    environment=prod
-```
-4. Configure Custom Domain & TLS
-```bash
-az containerapp hostname bind \
-  --resource-group rg-keycloak-prod \
-  --name keycloak-prod \
-  --hostname keycloak.yourdomain.com \
-  --certificate-file /path/to/cert.pfx \
-  --password "cert-password"
+docker compose logs keycloak
+docker compose config
 ```
 
----
+**The admin credentials no longer work**
 
-### Realms, Clients & Initial Configuration
-After deployment, SSH into the Container App or use the Keycloak admin console to configure:
+The bootstrap environment variables create a temporary administrator only when
+the `master` realm is first created; they do not reset an existing
+administrator's password. For this repository's disposable, non-volume setup,
+`docker compose down` followed by `docker compose up -d` creates a fresh server.
+Do not do this if the container contains data you need.
 
-1. Access Keycloak Admin Console
-```bash
-https://keycloak.yourdomain.com/admin
-Username: admin
-Password: [keycloak_password from above]
-```
-2. Create a Realm
-- Click "Create Realm" → Name it (e.g., myrealm)
-- Set Endpoints and SAML endpoints
-- Configure frontend URL to match your domain
-3. Create a Client (OAuth 2.0 / OIDC)
-- Navigate to Clients → Create Client
-- Set Client ID: my-app
-- Under Settings:
-  - Client authentication: On
-  - Valid redirect URIs: https://myapp.com/callback
-  - Web origins: https://myapp.com
-- Under Credentials → copy Client Secret
-4. Create Users & Roles
-- Users → Add User → Set username, email
-- Set Password → Toggle "Temporary" off
-- Role Mapping → Add roles as needed
+## Azure deployment
 
-> Example OAuth 2.0 Flow   
-```bash
-# 1. Get authorization code
-https://keycloak.yourdomain.com/realms/myrealm/protocol/openid-connect/auth?client_id=my-app&response_type=code&redirect_uri=https://myapp.com/callback&scope=openid%20profile%20email
+Azure is the next documentation and implementation phase. `main.bicep` is a
+useful inventory of intended services—Container Apps, PostgreSQL Flexible
+Server, Key Vault, managed identity, Log Analytics, and Application
+Insights—but it has not been validated as a deployable production architecture.
 
-# 2. Exchange code for token
-curl -X POST \
-  https://keycloak.yourdomain.com/realms/myrealm/protocol/openid-connect/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=authorization_code&code=AUTHORIZATION_CODE&client_id=my-app&client_secret=SECRET&redirect_uri=https://myapp.com/callback"
+Known items to resolve before documenting an Azure deployment include:
 
-```
+- pinning and upgrading the Keycloak image deliberately;
+- replacing obsolete proxy settings with configuration supported by the pinned
+  Keycloak release;
+- using private database networking instead of the current all-addresses
+  firewall rule;
+- validating regional PostgreSQL SKU, high-availability, and backup
+  combinations;
+- parameterizing hostname and TLS configuration;
+- validating managed-identity access to Key Vault;
+- adding health/readiness probes, sizing, migration, rollback, and backup
+  procedures;
+- checking the template with Bicep validation and deploying it to a disposable
+  Azure resource group.
 
-#### Critical Next Steps.  
-Before going to production:
-- ✅ Replace hardcoded domain (keycloak.example.com) with your actual domain
-- ✅ Configure VNET integration for database (remove open firewall rule)
-- ✅ Set up automated backups in Key Vault
-- ✅ Enable WAF on Front Door
-- ✅ Configure SMTP for email verification (Keycloak admin console)
-- ✅ Set up alerts in Application Insights for failures
-- ✅ Test failover scenarios with zone-redundant setup 
----
+Do not use the current template for a production deployment.
 
-### Key Production Tips:
-- Persistence: Always connect to an external PostgreSQL database.
-- HTTPS: Azure handles SSL termination, but you must configure Keycloak to trust the proxy by setting KC_PROXY=edge.
-- Hostnames: Set KC_HOSTNAME to your production URL so Keycloak generates correct redirect links.
+## k3s on Raspberry Pi 5
+
+The k3s phase will follow the Azure work. No active Kubernetes manifests or Helm
+values are currently present. That phase will cover, at minimum, ARM64 image
+compatibility, persistent storage, PostgreSQL, ingress and TLS, secrets,
+resource sizing, probes, backups, upgrades, and recovery.
+
+## References
+
+- [Keycloak: Get started with Docker](https://www.keycloak.org/getting-started/getting-started-docker)
+- [Keycloak: Running in a container](https://www.keycloak.org/server/containers)
+- [Keycloak: Bootstrapping and recovering an admin account](https://www.keycloak.org/server/bootstrap-admin-recovery)
+- [Keycloak: Server Administration Guide](https://www.keycloak.org/docs/latest/server_admin/)
+- [Keycloak: Configuring for production](https://www.keycloak.org/server/configuration-production)
+- [Keycloak: Configuring the database](https://www.keycloak.org/server/db)
+- [Docker Compose documentation](https://docs.docker.com/compose/)
