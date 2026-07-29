@@ -59,6 +59,7 @@ jobs:
         run: az bicep install
 
       - name: Compile Bicep
+        working-directory: azure
         run: |
           az bicep build \
             --file main.bicep \
@@ -77,6 +78,7 @@ jobs:
           fi
 
       - name: Validate resource-group deployment
+        working-directory: azure
         env:
           AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
           KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}
@@ -87,6 +89,7 @@ jobs:
 
       - name: Deploy infrastructure
         id: deploy
+        working-directory: azure
         env:
           AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
           KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}

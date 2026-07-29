@@ -138,9 +138,11 @@ committed or written into `main.bicepparam`.
 
 ### Validate and deploy manually
 
-From the repository root:
+From the `azure/` directory in the repository:
 
 ```bash
+cd azure
+
 az bicep install
 az bicep build --file main.bicep --stdout > /dev/null
 
@@ -173,14 +175,16 @@ az deployment group show \
 
 ### Use the native ARM template
 
-`azuredeploy.json` is the compiled ARM JSON equivalent of `main.bicep`. This is
-useful with **Azure portal → Deploy a custom template**, systems that accept ARM
-JSON but not Bicep, and Azure Deployment Stacks.
+`azure/azuredeploy.json` is the compiled ARM JSON equivalent of `azure/main.bicep`.
+This is useful with **Azure portal → Deploy a custom template**, systems that
+accept ARM JSON but not Bicep, and Azure Deployment Stacks.
 
 `main.bicep` remains the source of truth. After changing it, regenerate and
-review the ARM template:
+review the ARM template from the `azure/` directory:
 
 ```bash
+cd azure
+
 az bicep build \
   --file main.bicep \
   --outfile azuredeploy.json
@@ -189,7 +193,8 @@ git diff -- azuredeploy.json
 ```
 
 For a fast create/destroy lifecycle, manage the resources as a deployment
-stack. First load the two passwords as shown above, then validate:
+stack. First load the two passwords as shown above, then validate (still from
+`azure/`):
 
 ```bash
 az stack group validate \
