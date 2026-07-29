@@ -1,0 +1,114 @@
+name: Publish Keycloak k3s deployment
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/publish-k3s.yml
+      - k8s/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: keycloak-k3s-publish
+  cancel-in-progress: false
+
+env:
+  OCI_REPOSITORY: oci://ghcr.io/baiganio/keycloak-manifests
+
+jobs:
+  publish:
+    name: Render and publish deployment bundle
+    runs-on: ubuntu-24.04
+    environment: pi-production
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out triggering revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Flux CLI
+        uses: fluxcd/flux2/action@v2.8.8
+        with:
+          version: 2.8.8
+          token: ${{ github.token }}
+
+      - name: Render Kubernetes manifests
+        run: |
+          mkdir --parents "$RUNNER_TEMP/deployment"
+          kubectl kustomize k8s \
+            > "$RUNNER_TEMP/deployment/keycloak.yaml"
+
+          printf '%s\n' \
+            'apiVersion: kustomize.config.k8s.io/v1beta1' \
+            'kind: Kustomization' \
+            'resources:' \
+            '  - keycloak.yaml' \
+            > "$RUNNER_TEMP/deployment/kustomization.yaml"
+
+          sha256sum "$RUNNER_TEMP/deployment/keycloak.yaml"
+
+      - name: Sign in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Publish revision-specific OCI artifact
+        run: |
+          flux push artifact \
+            "$OCI_REPOSITORY:$GITHUB_SHA" \
+            --path="$RUNNER_TEMP/deployment" \
+            --source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --revision="master@sha1:$GITHUB_SHA" \
+            --annotations="org.opencontainers.image.description=Keycloak k3s deployment manifests"
+
+          flux tag artifact \
+            "$OCI_REPOSITORY:$GITHUB_SHA" \
+            --tag production
+
+      - name: Notify Flux on the Pi
+        env:
+          FLUX_WEBHOOK_URL: ${{ secrets.FLUX_WEBHOOK_URL }}
+          FLUX_WEBHOOK_TOKEN: ${{ secrets.FLUX_WEBHOOK_TOKEN }}
+        run: |
+          if [ -z "$FLUX_WEBHOOK_URL" ] && [ -z "$FLUX_WEBHOOK_TOKEN" ]; then
+            echo "Flux webhook is not configured; polling will detect the artifact."
+            exit 0
+          fi
+
+          if [ -z "$FLUX_WEBHOOK_URL" ] || [ -z "$FLUX_WEBHOOK_TOKEN" ]; then
+            echo "::error::Both FLUX_WEBHOOK_URL and FLUX_WEBHOOK_TOKEN must be configured."
+            exit 1
+          fi
+
+          payload="{\"revision\":\"$GITHUB_SHA\"}"
+          signature="$(printf '%s' "$payload" |
+            openssl dgst -sha256 -hmac "$FLUX_WEBHOOK_TOKEN" -binary |
+            xxd -plain -cols 256)"
+
+          curl --fail --silent --show-error \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header "X-Signature: sha256=$signature" \
+            --data "$payload" \
+            "$FLUX_WEBHOOK_URL"
+
+      - name: Write publication summary
+        run: |
+          {
+            echo "## Pi deployment bundle published"
+            echo
+            echo "- Revision: \`$GITHUB_SHA\`"
+            echo "- OCI source: \`$OCI_REPOSITORY:production\`"
+            echo "- The Pi is not a GitHub Actions runner."
+          } >> "$GITHUB_STEP_SUMMARY"

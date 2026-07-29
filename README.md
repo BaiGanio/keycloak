@@ -10,18 +10,24 @@ and documented in this order:
 
 The local Docker workflow is usable for development. Azure has a documented,
 cost-constrained proof-of-concept deployment that still requires validation in
-an Azure subscription. There is not yet a k3s deployment in the repository.
+an Azure subscription. The first k3s manifests have been prepared for the Pi 5
+cluster and still require an end-to-end deployment test on that cluster.
 
 ## Repository contents
 
 | Path | Purpose | Status |
 | --- | --- | --- |
 | `docker-compose.yml` | Runs Keycloak with PostgreSQL for local development | Usable; data persists in a named volume |
+| `zDOCKER.md` | Local Docker instructions and troubleshooting | Development guide |
 | `main.bicep` | Azure App Service and free-offer Azure SQL Database | Production-configured PoC; Azure validation required |
 | `main.bicepparam` | Sweden Central PoC parameters | Reads passwords from environment variables |
 | `azuredeploy.json` | Generated native ARM template equivalent to `main.bicep` | Use for portal deployment or deployment stacks |
 | `.github/workflows/deploy-azure.yml` | Validates, deploys, and smoke-tests Azure | Manual GitHub Actions workflow |
 | `.github/workflows/operate-azure.yml` | Starts, stops, or reports Azure resource state | Manual GitHub Actions workflow |
+| `zAZURE.md` | Azure deployment and operations instructions | PoC guide; Azure validation required |
+| `k8s/` | Runs Keycloak with PostgreSQL on the Pi 5 k3s cluster | Ready for first cluster deployment |
+| `k8s/flux/keycloak-sync.yaml` | Makes Flux pull and apply the published OCI bundle | One-time Pi bootstrap |
+| `.github/workflows/publish-k3s.yml` | Publishes deployment bundles to GHCR and notifies Flux | Runs only on GitHub-hosted infrastructure |
 
 ## Architecture
 
@@ -46,738 +52,342 @@ flowchart LR
 Keycloak's login pages and Admin Console are served by Keycloak itself. They are
 not a standalone frontend that can be hosted separately.
 
-## Local development with Docker
-
-### Prerequisites
-
-- Docker Desktop, Docker Engine with the Compose plugin, or an equivalent
-  Docker-compatible environment
-- Docker Compose v2 (`docker compose`, not the legacy `docker-compose` command)
-- port `8080` available on the host
-
-Confirm that Docker is running:
-
-```bash
-docker info
-docker compose version
-```
-
-### Start Keycloak
-
-From the repository root:
-
-```bash
-docker compose pull
-docker compose up -d
-docker compose logs -f keycloak
-```
-
-Wait for the log message that says Keycloak has started, then open:
-
-- Admin Console: <http://localhost:8080/admin/>
-- OpenID Connect discovery document:
-  <http://localhost:8080/realms/master/.well-known/openid-configuration>
-
-The development bootstrap credentials currently defined in
-`docker-compose.yml` are:
-
-```text
-username: admin
-password: admin
-```
-
-### Temporary bootstrap administrator
-
-After logging in as `admin`, Keycloak displays this message:
-
-> You are logged in as a temporary admin user. To harden security, create a
-> permanent admin account and delete the temporary one.
-
-This is expected. `KC_BOOTSTRAP_ADMIN_USERNAME` and
-`KC_BOOTSTRAP_ADMIN_PASSWORD` create a full-access account whose purpose is to
-bootstrap or recover administrator access. "Temporary" is an account
-classification and does not mean that it will expire after a few minutes.
-
-For this disposable local environment, it is acceptable to keep using the
-temporary `admin` account while experimenting. Do not keep it for a persistent,
-shared, or production environment.
-
-To replace it with a permanent server administrator:
-
-1. Log in with `admin` and make sure the current realm is **master**.
-2. Open **Users**, choose **Add user**, enter a new administrator username, and
-   create the user.
-3. Open the new user's **Credentials** tab and set a strong password with
-   **Temporary** set to **Off**.
-4. Open **Role mapping**, choose **Assign role**, filter by realm roles, and
-   assign the `admin` role.
-5. Log out and verify that the new account can sign in to the Admin Console and
-   manage realms.
-6. Only after that verification, sign in with the new account and delete the
-   temporary `admin` user.
-
-The local PostgreSQL data is stored in the
-`keycloak_postgres_data` named volume. A permanent administrator and other
-Keycloak configuration therefore survive container replacement and
-`docker compose down`. The bootstrap variables do not recreate a deleted
-temporary administrator in an already initialized database.
-
-You can also check that the HTTP endpoint is responding without opening a
-browser:
-
-```bash
-curl --fail \
-  http://localhost:8080/realms/master/.well-known/openid-configuration
-```
-
-The first startup can take longer while Docker downloads both images,
-initializes PostgreSQL, and lets Keycloak create its schema.
-
-### Container lifecycle
-
-Run these commands from the repository root:
-
-| Task | Command |
-| --- | --- |
-| Show status | `docker compose ps` |
-| Follow logs | `docker compose logs -f keycloak` |
-| Follow database logs | `docker compose logs -f postgres` |
-| Stop both services without removing them | `docker compose stop` |
-| Start both stopped services | `docker compose start` |
-| Restart Keycloak | `docker compose restart keycloak` |
-| Remove the container and Compose network | `docker compose down` |
-| Pull the configured image and recreate | `docker compose pull && docker compose up -d` |
-
-Press `Ctrl+C` to stop following logs. Because Keycloak is started in detached
-mode, this does not stop the server.
-
-### PostgreSQL persistence and reset behavior
-
-Local Docker and Azure intentionally use different supported database vendors:
-
-```text
-Local Docker: Keycloak → PostgreSQL 17
-Azure:        Keycloak → Azure SQL Database (mssql)
-```
-
-The Compose PostgreSQL service mounts
-`keycloak_postgres_data:/var/lib/postgresql/data`:
-
-- `docker compose stop` followed by `docker compose start` keeps all data;
-- `docker compose down` removes containers and the network but keeps the volume;
-- `docker compose up -d` after `down` reconnects to the existing database;
-- `docker compose down --volumes` permanently deletes the local database.
-
-To perform a complete local reset:
-
-```bash
-docker compose down --volumes
-docker compose up -d
-```
-
-The next startup creates a fresh PostgreSQL database and temporary `admin`
-account. Do not run the reset command if the volume contains configuration you
-need.
-
-### Local security boundaries
-
-The Compose configuration deliberately favors convenience and must not be used
-as a production deployment:
-
-- `start-dev` enables development-mode defaults;
-- the bootstrap administrator and PostgreSQL passwords are public and trivial;
-- HTTP is used instead of HTTPS;
-- port 8080 is deliberately bound only to `127.0.0.1`;
-- PostgreSQL is reachable only inside the Compose network and is not published
-  on a host port;
-- images are pinned to Keycloak `26.7.0` and PostgreSQL `17.10-alpine`;
-- the PostgreSQL health check orders startup but is not production monitoring;
-- there is no backup, TLS between containers, resource limit, or production
-  proxy configuration.
-
-### Troubleshooting
-
-**Docker cannot connect to the daemon**
-
-Start Docker Desktop or the Docker service, then retry `docker info`.
-
-**Port 8080 is already in use**
-
-Find the process or container using the port, or change the host side of the
-mapping, for example `127.0.0.1:8180:8080`. If the port changes, use
-`http://localhost:8180` in local application configuration.
-
-**Keycloak exits during startup**
-
-Inspect the complete logs and the resolved Compose configuration:
-
-```bash
-docker compose logs keycloak
-docker compose logs postgres
-docker compose ps
-docker compose config
-```
-
-**The admin credentials no longer work**
-
-The bootstrap environment variables create a temporary administrator only when
-the `master` realm is first created; they do not reset an existing
-administrator's password. The PostgreSQL volume preserves the existing account.
-If no local data must be retained, use `docker compose down --volumes` and start
-again. This permanently deletes all local Keycloak data.
-
----
-
-## Azure deployment
-
-> NOTE: This example is not fully verified yet!
-
-This deployment is a deliberately small, cost-constrained proof of concept. It
-uses production-mode Keycloak and Azure SQL Database, but the F1 web app does
-not provide production-grade capacity, availability, monitoring, or private
-networking.
-
-Local Docker continues to use PostgreSQL. The database vendor is selected per
-environment:
-
-```text
-Local Docker: Keycloak → PostgreSQL
-Azure:        Keycloak → Azure SQL Database (`KC_DB=mssql`)
-```
-
-Both databases are officially supported by Keycloak. They are independent
-installations; local realms, users, and clients are not automatically copied to
-Azure.
-
-### Architecture and deliberate constraints
-
-```mermaid
-flowchart LR
-    user["Browser or application"]
-    app["Azure App Service<br/>F1-linux · Keycloak 26.7.0"]
-    db[("Azure SQL Database<br/>Free offer · Serverless · 4 GB cap")]
-    actions["GitHub Actions<br/>OIDC deployment and operations"]
-
-    user -- "HTTPS" --> app
-    app -- "Encrypted JDBC · mssql" --> db
-    actions -. "Deploy · start · stop · status" .-> app
-    actions -. "Deploy · inspect" .-> db
-```
-
-| Setting | Value |
-| --- | --- |
-| Azure region | Sweden Central (`swedencentral`) |
-| Existing resource group | `keycloak` |
-| Existing Linux App Service plan | `F1-linux` |
-| App Service plan tier | Free F1 |
-| Web app | `lk-keycloak` |
-| Public URL | <https://lk-keycloak.azurewebsites.net> |
-| Keycloak image | `quay.io/keycloak/keycloak:26.7.0` |
-| Azure database vendor | Azure SQL Database (`mssql`) |
-| Azure SQL compute | General Purpose serverless, Gen5, up to 2 vCores |
-| Database maximum size | 4 GB |
-| Free-limit behavior | Auto-pause for the remainder of the month; never bill overage |
-| Inactivity auto-pause | After 60 idle minutes |
-| Backup storage | Locally redundant, within the free-offer allowance |
-
-The web-app and SQL logical-server names must be globally unique. Their
-deterministic defaults can fail if another Azure customer already owns them.
-
-F1 runs on shared compute, has no service-level agreement or Always On, and is
-limited to 60 CPU minutes per day. Keycloak recommends more memory than F1
-provides. The reduced JVM heap and small JDBC pool are reasonable experiments
-for at most ten PoC users, but Keycloak may start slowly, exhaust its quota, or
-fail. Other apps on `F1-linux` share those quotas.
-
-The SQL database has a public endpoint. Its `0.0.0.0` firewall rule means
-"allow Azure services"; it does not open every public internet address, but it
-is broader than an app-specific private route. JDBC requires TLS and certificate
-validation. The Keycloak pool starts with one connection and can grow to five.
-
-### Understand the Azure SQL free offer
-
-The Azure SQL free offer provides each eligible database with a monthly
-allowance of 100,000 vCore seconds, 32 GB of data, and 32 GB of backup storage.
-This repository deliberately caps data at 4 GB.
-
-The template sets both safety mechanisms:
-
-- normal inactivity: Azure SQL can auto-pause after 60 minutes with no sessions
-  or user CPU, then resumes when Keycloak reconnects;
-- exhausted monthly free allowance: `AutoPause` keeps the database unavailable
-  for the remainder of that calendar month instead of billing an overage.
-
-The free allowance renews at the start of the next calendar month. A paused
-database can take about a minute to resume. The first connection can fail while
-resume begins, so the workflows retry the public Keycloak endpoint.
-
-The offer is subject to subscription eligibility and regional rules. Before
-deploying, open **Azure SQL hub → Create SQL Database → Start free** and confirm
-that the portal displays **Free offer applied** for this subscription and Sweden
-Central. The Bicep deployment requests the free limit explicitly; it does not
-silently fall back to a paid S0 or General Purpose database.
-
-### Prerequisites
-
-The operator needs:
-
-- an Azure subscription eligible for an Azure SQL free-offer database;
-- the existing `keycloak` resource group;
-- the existing Linux `F1-linux` plan in Sweden Central;
-- Azure CLI and resource-group deployment permission;
-- permission to configure a Microsoft Entra application, service principal,
-  federated credential, and role assignment;
-- administrator access to the GitHub repository;
-- separate strong passwords for Azure SQL and the temporary Keycloak admin.
-
-Sign in, select the subscription, and verify the existing plan:
-
-```bash
-az login
-az account list --output table
-az account set --subscription "<subscription-id-or-name>"
-
-az group show \
-  --name keycloak \
-  --query '{name:name, location:location, state:properties.provisioningState}'
-
-az appservice plan show \
-  --resource-group keycloak \
-  --name F1-linux \
-  --query '{name:name, location:location, sku:sku.name, linux:reserved}'
-```
-
-The plan must show `swedencentral`, `F1`, and `linux: true`.
-
-### Configure password secrets
-
-For a manual deployment, read the passwords without putting their values in the
-command line:
-
-```bash
-read -s AZURE_SQL_ADMIN_PASSWORD
-export AZURE_SQL_ADMIN_PASSWORD
-
-read -s KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
-export KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
-```
-
-The terminal deliberately displays no input. The password values must not be
-committed or written into `main.bicepparam`.
-
-### Validate and deploy manually
-
-From the repository root:
-
-```bash
-az bicep install
-az bicep build --file main.bicep --stdout > /dev/null
-
-az deployment group validate \
-  --resource-group keycloak \
-  --parameters main.bicepparam
-
-az deployment group create \
-  --name keycloak-manual \
-  --resource-group keycloak \
-  --parameters main.bicepparam
-```
-
-The parameter file reads `AZURE_SQL_ADMIN_PASSWORD` and
-`KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD` from the environment and sends them as
-secure deployment parameters. Clear them afterward:
-
-```bash
-unset AZURE_SQL_ADMIN_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
-```
-
-Inspect the outputs:
-
-```bash
-az deployment group show \
-  --name keycloak-manual \
-  --resource-group keycloak \
-  --query properties.outputs
-```
-
-### Use the native ARM template
-
-`azuredeploy.json` is the compiled ARM JSON equivalent of `main.bicep`. This is
-useful with **Azure portal → Deploy a custom template**, systems that accept ARM
-JSON but not Bicep, and Azure Deployment Stacks.
-
-`main.bicep` remains the source of truth. After changing it, regenerate and
-review the ARM template:
-
-```bash
-az bicep build \
-  --file main.bicep \
-  --outfile azuredeploy.json
-
-git diff -- azuredeploy.json
-```
-
-For a fast create/destroy lifecycle, manage the resources as a deployment
-stack. First load the two passwords as shown above, then validate:
-
-```bash
-az stack group validate \
-  --name keycloak-poc \
-  --resource-group keycloak \
-  --template-file azuredeploy.json \
-  --action-on-unmanage deleteResources \
-  --deny-settings-mode none \
-  --parameters \
-    sqlAdminPassword="$AZURE_SQL_ADMIN_PASSWORD" \
-    keycloakBootstrapAdminPassword="$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD"
-```
-
-Create or update the stack:
-
-```bash
-az stack group create \
-  --name keycloak-poc \
-  --resource-group keycloak \
-  --template-file azuredeploy.json \
-  --action-on-unmanage deleteResources \
-  --deny-settings-mode none \
-  --parameters \
-    sqlAdminPassword="$AZURE_SQL_ADMIN_PASSWORD" \
-    keycloakBootstrapAdminPassword="$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD"
-
-unset AZURE_SQL_ADMIN_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
-```
-
-Inspect exactly what the stack manages before destroying it:
-
-```bash
-az stack group show \
-  --name keycloak-poc \
-  --resource-group keycloak \
-  --query '{state:provisioningState, resources:resources[].id}'
-```
-
-Destroy the stack and its managed resources:
-
-```bash
-az stack group delete \
-  --name keycloak-poc \
-  --resource-group keycloak \
-  --action-on-unmanage deleteResources \
-  --yes
-```
-
-This permanently deletes `lk-keycloak`, the generated Azure SQL logical server,
-its firewall rule, and the `keycloak` database. The resource group and existing
-`F1-linux` plan are references, not stack-managed resources, and remain.
-
-Do not use `detachAll` when the intention is cleanup: it deletes only the stack
-record and leaves billable resources running. The commands deliberately use
-`deny-settings-mode none`, so the stack does not block normal portal or CLI
-updates during the PoC.
-
-### Configure GitHub-to-Azure OIDC
-
-The workflows use short-lived OpenID Connect tokens rather than an Azure client
-secret or App Service publish profile.
-
-1. In **Microsoft Entra ID → App registrations**, create
-   `github-keycloak-deployer`.
-2. Record its **Application (client) ID** and **Directory (tenant) ID**.
-3. Ensure it has a service principal in the tenant.
-4. Grant that service principal **Contributor** on resource group `keycloak`.
-5. Open **Certificates & secrets → Federated credentials → Add credential**.
-6. Choose **GitHub Actions deploying Azure resources**.
-7. Enter the GitHub owner and repository.
-8. Select **Branch**, enter `master`, and create the credential. Its subject is
-   `repo:<owner>/<repository>:ref:refs/heads/master`.
-
-In **GitHub → Settings → Secrets and variables → Actions**, create:
-
-| Secret | Value |
-| --- | --- |
-| `AZURE_CLIENT_ID` | Entra application client ID |
-| `AZURE_TENANT_ID` | Azure tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Target subscription ID |
-| `AZURE_SQL_ADMIN_PASSWORD` | Strong Azure SQL administrator password |
-| `KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD` | Strong temporary Keycloak password |
-
-Restrict who can modify workflows and repository secrets. The GitHub identity
-can modify resources throughout the `keycloak` resource group.
-
-### Deploy from GitHub Actions
-
-1. Open **GitHub → Actions → Deploy Keycloak to Azure**.
-2. Run it from the `master` branch.
-3. Follow the **Validate, deploy, and verify** job.
-
-The workflow authenticates through OIDC, confirms that `F1-linux` is a free
-Linux plan in Sweden Central, compiles and validates Bicep, deploys the
-resources, and retries the master-realm discovery endpoint.
-
-The first deployment creates a new Azure SQL schema. A later redeployment is
-declarative and does not delete Keycloak data.
-
-### Verify and bootstrap Keycloak
-
-Check the public discovery endpoint:
-
-```bash
-curl --fail \
-  https://lk-keycloak.azurewebsites.net/realms/master/.well-known/openid-configuration
-```
-
-Then open <https://lk-keycloak.azurewebsites.net/admin/> and sign in with:
-
-```text
-username: admin
-password: the value of KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
-```
-
-Create and verify a permanent administrator in the `master` realm, then delete
-the temporary administrator. Changing the bootstrap secret later does not
-change an administrator already stored in Azure SQL.
-
-Create application users and clients in a separate realm. An application's
-issuer URL is:
-
-```text
-https://lk-keycloak.azurewebsites.net/realms/<realm-name>
-```
-
-### Start, stop, and inspect the deployment
-
-The **Operate Keycloak in Azure** workflow provides:
-
-- `start`: starts App Service; Keycloak's first database connection triggers
-  Azure SQL auto-resume, and the workflow waits up to 15 minutes;
-- `stop`: stops App Service so its JDBC sessions close; Azure SQL then
-  auto-pauses after 60 idle minutes;
-- `status`: reports the App Service and Azure SQL states.
-
-Azure SQL serverless does not provide a manual pause command. Stopping Keycloak
-is what releases the sessions needed for automatic pause.
-
-Equivalent CLI commands:
-
-```bash
-SQL_SERVER_NAME="$(az sql server list \
-  --resource-group keycloak \
-  --query "[?tags.workload == 'keycloak-poc'].name | [0]" \
-  --output tsv)"
-
-az webapp stop --resource-group keycloak --name lk-keycloak
-
-az sql db show \
-  --resource-group keycloak \
-  --server "$SQL_SERVER_NAME" \
-  --name keycloak \
-  --query status \
-  --output tsv
-
-az webapp start --resource-group keycloak --name lk-keycloak
-```
-
-Stopping F1 does not reduce an already-zero App Service price, but it preserves
-its daily CPU quota and allows Azure SQL to auto-pause.
-
-### Cost behavior
-
-Within the free offer, the intended Azure cost is zero for both F1 and Azure
-SQL. The logical SQL server itself has no separate compute charge.
-
-The database uses:
-
-- at most 4 GB of the 32 GB monthly data allowance;
-- locally redundant backup storage within the free allowance;
-- at most 100,000 free vCore seconds per month;
-- `AutoPause`, never `BillOverUsage`, when the free compute allowance ends.
-
-This configuration prefers temporary unavailability to an unexpected database
-charge. Azure pricing, taxes, subscription offers, and eligibility can change;
-confirm the portal cost summary says zero before deployment and configure an
-Azure budget separately.
-
-No Log Analytics, Application Insights, Key Vault, private endpoint, NAT
-gateway, paid DNS, or additional paid database service is created.
-
-### Logs and troubleshooting
-
-Resolve the SQL server name and show current state:
-
-```bash
-SQL_SERVER_NAME="$(az sql server list \
-  --resource-group keycloak \
-  --query "[?tags.workload == 'keycloak-poc'].name | [0]" \
-  --output tsv)"
-
-az webapp show \
-  --resource-group keycloak \
-  --name lk-keycloak \
-  --query '{state:state, host:defaultHostName}'
-
-az sql db show \
-  --resource-group keycloak \
-  --server "$SQL_SERVER_NAME" \
-  --name keycloak \
-  --query '{status:status, sku:currentServiceObjectiveName, maxSizeBytes:maxSizeBytes, freeLimit:useFreeLimit, exhaustion:freeLimitExhaustionBehavior}'
-```
-
-Enable and follow App Service container logs:
-
-```bash
-az webapp log config \
-  --resource-group keycloak \
-  --name lk-keycloak \
-  --docker-container-logging filesystem
-
-az webapp log tail \
-  --resource-group keycloak \
-  --name lk-keycloak
-```
-
-**Deployment says the free database is unavailable**
-
-Confirm the subscription still has a free-offer allocation and that its free
-database region is Sweden Central. Do not remove `useFreeLimit` merely to make
-deployment succeed; that can create a paid General Purpose database.
-
-**Azure SQL is `Paused` during ordinary inactivity**
-
-This is expected. Start the web app and allow about a minute for the first
-connection to trigger resume. App Service may retry the Keycloak container
-while SQL returns transient error 40613.
-
-**Azure SQL remains unavailable for the rest of the month**
-
-The 100,000 vCore-second allowance was exhausted. `AutoPause` deliberately
-prevents charges. The allowance renews next month. Changing to
-`BillOverUsage` is a cost-bearing decision outside this PoC.
-
-**The web app returns 403 with a quota message**
-
-F1 exhausted its daily CPU or another Free-tier quota. Wait for reset or scale
-the existing plan to B1. Restarting the app does not reset the quota.
-
-**The web app returns 503 or repeatedly restarts**
-
-Inspect container logs. Keycloak may be waiting for Azure SQL to resume,
-exceeding F1 memory, or exhausting F1 CPU. If memory is the cause, B1 is the
-minimum practical next test.
-
-**Keycloak reports an SQL login or TLS failure**
-
-Confirm the GitHub SQL password matches the password last deployed, and inspect
-the logical-server firewall:
-
-```bash
-az sql server firewall-rule list \
-  --resource-group keycloak \
-  --server "$SQL_SERVER_NAME" \
-  --output table
-```
-
-The expected rule is `AllowAzureServices` with start and end address `0.0.0.0`.
-
-**GitHub cannot authenticate to Azure**
-
-Confirm the three Azure identifier secrets, the exact repository/`master`
-federated subject, and the workflow's `id-token: write` permission.
-
-**A global resource name is unavailable**
-
-Change `webAppName` in `main.bicepparam` if `lk-keycloak` is taken, and also
-change `AZURE_WEB_APP_NAME` in `operate-azure.yml`. Change the deterministic SQL
-server name expression in `main.bicep` only if its generated name is taken.
-
-### Backup, upgrade, and rollback
-
-The free offer includes locally redundant backup storage and up to seven days
-of point-in-time retention. A restore creates another database and cannot be
-converted into the free offer. Before important changes, export a BACPAC or use
-another tested logical export process and store it securely.
-
-To upgrade Keycloak:
-
-1. verify a recent backup or export;
-2. read the Keycloak release notes and upgrading guide;
-3. change `keycloakVersion` in `main.bicepparam`;
-4. run the deployment workflow;
-5. verify login, token issuance, Admin Console access, and application clients.
-
-Keycloak may migrate its schema during startup. Reverting only the image does
-not necessarily revert Azure SQL; use a tested database restore for a
-schema-level rollback.
-
-### Cleanup
-
-Cleanup permanently removes Azure realms, clients, users, and credentials.
-Export anything required first.
-
-Resolve and review the exact resources:
-
-```bash
-SQL_SERVER_NAME="$(az sql server list \
-  --resource-group keycloak \
-  --query "[?tags.workload == 'keycloak-poc'].name | [0]" \
-  --output tsv)"
-
-printf '%s\n' "Web app: lk-keycloak"
-printf '%s\n' "Azure SQL server and database: $SQL_SERVER_NAME"
-```
-
-Delete only the resources created by the template:
-
-```bash
-az webapp delete \
-  --resource-group keycloak \
-  --name lk-keycloak
-
-az sql server delete \
-  --resource-group keycloak \
-  --name "$SQL_SERVER_NAME" \
-  --yes
-```
-
-Deleting the logical SQL server also deletes its `keycloak` database. The
-existing `F1-linux` plan, `keycloak` resource group, Entra application, role
-assignment, GitHub secrets, and deployment-history records remain.
-
-### Promotion beyond the PoC
-
-Before describing this as production-ready:
-
-- move Keycloak to dedicated compute with sufficient memory;
-- choose a paid Azure SQL tier based on measured load and recovery objectives;
-- use private SQL networking and managed database authentication;
-- introduce a custom domain and controlled DNS lifecycle;
-- protect and monitor administrator access;
-- add centralized logs, metrics, alerts, and cost budgets;
-- load-test authentication and token flows;
-- rehearse image upgrades, database restores, and disaster recovery.
-
 ---
 
 ## k3s on Raspberry Pi 5
 
-The k3s phase will follow the Azure work. No active Kubernetes manifests or Helm
-values are currently present. That phase will cover, at minimum, ARM64 image
-compatibility, persistent storage, PostgreSQL, ingress and TLS, secrets,
-resource sizing, probes, backups, upgrades, and recovery.
+> NOTE: The manifests are ready for their first deployment but have not yet
+> completed an end-to-end test on the real cluster. Keep the PostgreSQL PVC
+> until backup and restore have also been tested.
 
----
+Check where the existing Cloudflare Tunnel runs:
 
-## References
+```bash
+sudo systemctl status cloudflared --no-pager
+sudo docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+sudo kubectl get pods -A | grep -i cloudflared
+```
 
-- [Keycloak: Get started with Docker](https://www.keycloak.org/getting-started/getting-started-docker)
-- [Keycloak: Running in a container](https://www.keycloak.org/server/containers)
-- [Keycloak: Bootstrapping and recovering an admin account](https://www.keycloak.org/server/bootstrap-admin-recovery)
-- [Keycloak: Server Administration Guide](https://www.keycloak.org/docs/latest/server_admin/)
-- [Keycloak: Configuring for production](https://www.keycloak.org/server/configuration-production)
-- [Keycloak: Configuring the database](https://www.keycloak.org/server/db)
-- [Docker Compose documentation](https://docs.docker.com/compose/)
-- [Azure App Service limits](https://learn.microsoft.com/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-service-limits)
-- [Azure SQL Database free offer](https://learn.microsoft.com/azure/azure-sql/database/free-offer)
-- [Azure SQL Database serverless auto-pause](https://learn.microsoft.com/azure/azure-sql/database/serverless-tier-overview#auto-pause-and-auto-resume)
-- [Azure CLI resource-group deployment stacks](https://learn.microsoft.com/cli/azure/stack/group)
-- [Azure App Service deployment with GitHub Actions](https://learn.microsoft.com/azure/app-service/deploy-github-actions)
+Commands reporting a missing `cloudflared` service, missing `docker` command,
+or no matching Kubernetes pod are useful results rather than failures. Do not
+paste the tunnel token, credentials file, certificate, or the contents of
+Cloudflare configuration files.
+
+The inspection established that `cloudflared` 2026.7.3 is installed as an
+enabled and active host systemd service, not as a Docker container or
+Kubernetes workload.
+
+The observed cluster is:
+
+| Item | Observed value |
+| --- | --- |
+| Node | `jupiter`, k3s v1.35.6+k3s1 |
+| Node address | `192.168.0.113` |
+| Operating system | Debian 13 on Raspberry Pi 5 |
+| Container runtime | containerd 2.2.5-k3s2 |
+| Ingress | Traefik with ServiceLB on host ports 80 and 443 |
+| Storage class | `local-path`, `WaitForFirstConsumer` |
+| Backing filesystem | 458 GB NVMe ext4 root filesystem |
+
+Both pinned container-image indexes contain a Linux ARM64 image. The PostgreSQL
+PVC requests 20 GiB from `local-path`; the provisioner creates its backing
+directory when the first PostgreSQL pod is scheduled, so a missing
+`/var/lib/rancher/k3s/storage` directory before deployment is not itself an
+error.
+
+### Coexistence with other PostgreSQL servers
+
+This PostgreSQL does not bind the Pi's port 5432. It has no `hostPort`,
+`NodePort`, `LoadBalancer`, or host-network setting. Port 5432 exists only
+inside the PostgreSQL pod and its private `ClusterIP` Service in the `keycloak`
+namespace.
+
+It can therefore coexist with:
+
+- a PostgreSQL server listening on the Pi host's port 5432;
+- PostgreSQL pods listening on port 5432 in other pods;
+- a Service named `postgres` in another Kubernetes namespace.
+
+Keycloak connects to the namespace-local `postgres:5432` Service. Changing this
+private port would not improve isolation. The separate namespace, Service, pod
+network, and dedicated PVC provide the isolation that matters.
+
+### Automatic GitHub-to-Pi deployment
+
+The canonical public hostname in the manifests is `auth.baiganio.io`. Replace
+all occurrences of that hostname under `k8s/` before deploying if it is not the
+intended hostname.
+
+The Pi is not a GitHub Actions runner and never clones this repository. The
+workflow in `.github/workflows/publish-k3s.yml` runs entirely on a disposable
+GitHub-hosted runner:
+
+1. it checks out the triggering revision;
+2. renders `k8s/` into one Kubernetes YAML bundle;
+3. publishes the bundle to
+   `ghcr.io/baiganio/keycloak-manifests:<commit-sha>`;
+4. moves the `production` OCI tag to that exact artifact;
+5. sends an authenticated webhook after publication.
+
+Flux runs as ordinary controllers inside k3s. The webhook tells Flux to
+reconcile immediately; Flux pulls the ready OCI artifact from GHCR and applies
+it. A five-minute polling interval provides recovery if a webhook is missed.
+The Pi downloads only the OCI deployment bundle and the digest-pinned
+application images.
+
+#### One-time Flux and credential bootstrap
+
+Some trust must be established once: install Flux, create the initial database
+credentials, and connect its OCI source. These are cluster bootstrap actions,
+not application deployments.
+
+After the first workflow publication, make the
+`baiganio/keycloak-manifests` GHCR package public. The artifact contains no
+credentials.
+
+Install the pinned Flux release on the Pi:
+
+```bash
+sudo kubectl apply --server-side \
+  -f https://github.com/fluxcd/flux2/releases/download/v2.8.8/install.yaml
+
+sudo kubectl --namespace flux-system wait deployment \
+  --all --for=condition=Available --timeout=5m
+```
+
+Create the one-time application credentials directly in Kubernetes:
+
+```bash
+sudo kubectl create namespace keycloak
+
+read -rsp 'PostgreSQL password: ' KEYCLOAK_POSTGRES_PASSWORD
+printf '\n'
+read -rsp 'Temporary Keycloak admin password: ' KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
+printf '\n'
+
+printf 'postgres-password=%s\nbootstrap-admin-password=%s\n' \
+  "$KEYCLOAK_POSTGRES_PASSWORD" \
+  "$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD" |
+  sudo kubectl --namespace keycloak create secret generic keycloak-credentials \
+    --from-env-file=/dev/stdin
+
+unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
+```
+
+Generate a separate webhook token, save it as the `FLUX_WEBHOOK_TOKEN` secret
+in the GitHub `pi-production` environment, then enter that same value silently
+on the Pi:
+
+```bash
+read -rsp 'Flux webhook token: ' FLUX_WEBHOOK_TOKEN
+printf '\n'
+
+printf 'token=%s\n' "$FLUX_WEBHOOK_TOKEN" |
+  sudo kubectl --namespace flux-system create secret generic \
+    keycloak-webhook-token \
+    --from-env-file=/dev/stdin
+
+unset FLUX_WEBHOOK_TOKEN
+```
+
+Apply only the Flux source configuration directly from GitHub:
+
+```bash
+curl --fail --silent --show-error --location \
+  https://raw.githubusercontent.com/BaiGanio/keycloak/master/k8s/flux/keycloak-sync.yaml |
+  sudo kubectl apply -f -
+```
+
+Flux exposes its authenticated receiver through the
+`deploy.baiganio.io` Ingress. Add this Cloudflare Tunnel route:
+
+```text
+Public hostname: deploy.baiganio.io
+Service:         http://127.0.0.1:80
+```
+
+Get the receiver's unguessable path:
+
+```bash
+sudo kubectl --namespace flux-system get receiver keycloak \
+  --output=jsonpath='{.status.webhookPath}{"\n"}'
+```
+
+Save `https://deploy.baiganio.io` plus that path as the
+`FLUX_WEBHOOK_URL` secret in the same GitHub environment. From then on, every
+relevant push publishes and deploys automatically. No runner, repository
+checkout, or application deployment command runs on the Pi.
+
+"Local target URL" means the private service to which Cloudflare sends requests
+after accepting traffic for the public hostname. For example:
+
+```text
+Public hostname: auth.baiganio.io
+Local service:   http://127.0.0.1:80
+```
+
+For a remotely managed tunnel, sign in to the Cloudflare dashboard and open
+**Zero Trust → Networks → Connectors → Cloudflare Tunnels**, choose the tunnel,
+and add or inspect its published application route:
+
+```text
+Public hostname: auth.baiganio.io
+Service:         http://127.0.0.1:80
+```
+
+The incoming `Host` header should remain `auth.baiganio.io`; set the route's
+HTTP Host Header origin parameter to that value if another value is configured.
+No origin certificate or `noTLSVerify` setting is needed for this local HTTP
+hop. After saving the route, verify the public endpoint:
+
+```bash
+curl --fail --show-error \
+  https://auth.baiganio.io/realms/master/.well-known/openid-configuration
+```
+
+Then open <https://auth.baiganio.io/admin/> and sign in as `admin` with the
+temporary bootstrap password. Create and verify a permanent administrator
+before deleting the temporary account.
+
+For a locally managed tunnel, this command reports the matching ingress rule
+without displaying the tunnel credential:
+
+```bash
+sudo cloudflared tunnel ingress rule https://auth.baiganio.io
+```
+
+If it reports that no configuration file or rule exists, configure the route
+later rather than inventing one now. Do not paste `systemctl cat cloudflared`
+output because a remotely managed service unit may contain its tunnel token.
+
+### First architecture
+
+The first deployed architecture is:
+
+```mermaid
+flowchart LR
+    user["Browser"]
+    cloudflare["Cloudflare edge<br/>HTTPS + baiganio.io"]
+    tunnel["Existing cloudflared tunnel"]
+    ingress["Existing k3s ingress"]
+    keycloak["Keycloak<br/>production mode · ARM64"]
+    postgres[("PostgreSQL<br/>SSD-backed PVC")]
+    github["GitHub push"]
+    prepare["GitHub-hosted job<br/>checkout + kustomize"]
+    artifact["GHCR OCI bundle<br/>revision-specific + production tag"]
+    flux["Flux in k3s<br/>pull + reconcile"]
+    hook["Authenticated webhook<br/>deploy.baiganio.io"]
+    registry["Upstream registries<br/>digest-pinned ARM64 images"]
+
+    user -- "HTTPS" --> cloudflare
+    cloudflare --> tunnel
+    tunnel --> ingress
+    ingress --> keycloak
+    keycloak --> postgres
+    github --> prepare
+    prepare --> artifact
+    prepare -. "notify after publish" .-> hook
+    hook --> flux
+    flux -- "pull ready bundle" --> artifact
+    flux -. "server-side reconcile" .-> keycloak
+    registry -. "container image pulls" .-> keycloak
+    registry -. "container image pulls" .-> postgres
+```
+
+Kubernetes resources:
+
+| Resource | First-iteration purpose |
+| --- | --- |
+| Namespace | Keep the deployment isolated as `keycloak` |
+| Secret | Supply database and bootstrap credentials without committing values |
+| PostgreSQL workload | Run one PostgreSQL instance in the cluster |
+| PostgreSQL PVC | Keep database files on the Pi's SSD |
+| Keycloak Deployment | Run one production-mode Keycloak replica initially |
+| ClusterIP Services | Expose PostgreSQL internally and Keycloak to ingress |
+| Ingress | Route the chosen `baiganio.io` hostname to Keycloak |
+| Resource settings | Prevent Keycloak from consuming all 8 GB on a shared Pi |
+| Startup/readiness probes | Keep traffic away while Keycloak is starting |
+
+The manifests use the observed `local-path` storage class and Traefik ingress.
+PostgreSQL is not exposed outside the cluster. Keycloak requests 1 GiB of
+memory and is limited to 2 GiB; PostgreSQL requests 256 MiB and is limited to
+1 GiB, leaving capacity for k3s and the Pi's other workloads.
+
+### Cloudflare Tunnel and TLS boundary
+
+The configured public hostname is `auth.baiganio.io`. Cloudflare terminates
+public HTTPS. The host `cloudflared` service then forwards traffic to the local
+k3s Traefik ingress over HTTP.
+
+This can avoid adding cert-manager in the first iteration. It does not remove
+the need to configure Keycloak with its public hostname and trusted proxy
+headers; otherwise redirects, cookies, issuer URLs, and the Admin Console can
+use the wrong scheme or host.
+
+Direct LAN access and access through the public hostname are not automatically
+interchangeable. OIDC clients validate the issuer exactly. The public
+`https://auth.baiganio.io` issuer should be the canonical identity once the
+tunnel is enabled.
+
+### GitHub-to-Pi deployment model
+
+There is currently no custom Keycloak `Dockerfile` in this repository. Until
+one is added, deployment uses the digest-pinned upstream ARM64-compatible
+Keycloak and PostgreSQL images. A later custom image must be published with an
+immutable tag or digest before the deployment bundle is published.
+
+GitHub Actions has no Kubernetes credential and cannot access the Pi's
+Kubernetes API. Flux has no repository checkout and pulls only the published
+OCI artifact. The HMAC-authenticated receiver requests an immediate pull after
+publication; periodic reconciliation remains the source of eventual recovery.
+
+Do not use the mutable `latest` tag. A deployment must identify the exact image
+that was built, making its state understandable and rollback possible.
+
+### Secrets boundary
+
+Database and Keycloak credentials exist only in the Kubernetes Secret created
+during cluster bootstrap; GitHub never receives them. The separate webhook
+token exists in both the Kubernetes Receiver Secret and the `pi-production`
+GitHub environment. Running `kubectl get secret ... -o yaml` does not safely
+reveal or audit a secret; its values are merely base64-encoded.
+
+SOPS, Sealed Secrets, External Secrets, and a PostgreSQL operator are reasonable
+later options for automating secret rotation and database operations.
+
+### Relationship to the existing SD-card backup guide
+
+The separate
+[`k3s-pi5` SD-card backup example](https://github.com/BaiGanio/k3s-pi5/blob/master/modules/k3s-pi5/sd-card-backup.js)
+is useful because it combines logical PostgreSQL dumps with copies of k3s
+configuration and persistent-volume data.
+
+It is not automatically compatible with this deployment. Its example contains
+assumptions such as a particular `postgres` Deployment, namespace, database
+user, `/mnt/k3s-data` path, and application workload names. This Keycloak
+deployment may instead use a StatefulSet, a different namespace, a dynamically
+provisioned PVC, and different credentials.
+
+For the first iteration, the guide is treated as an existing cluster-level
+safety mechanism to inspect, not as a verified Keycloak restore procedure.
+Later work will adapt the logical `pg_dump` step to the actual Keycloak
+PostgreSQL resource and test a restore. Copying live PostgreSQL data files by
+itself is not a substitute for a database-consistent backup.
+
+### Deferred work
+
+The following are intentionally documented but not required to get the first
+Pi deployment running:
+
+- scheduled and encrypted PostgreSQL-aware backups;
+- a tested PostgreSQL restore procedure;
+- multi-node replicated storage or highly available PostgreSQL;
+- automated discovery, Admin Console, login, and token smoke tests;
+- rehearsed Keycloak and PostgreSQL upgrade and rollback procedures;
+- disaster-recovery drills for loss of the node or SSD;
+- secret-management operators;
+- cert-manager, unless the observed ingress/tunnel layout requires origin TLS;
+- multiple Keycloak replicas and load testing.
+
+These items become meaningful only after the initial workload, storage,
+hostname, ingress, and deployment flow are verified on the real Pi.
