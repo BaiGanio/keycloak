@@ -1,0 +1,309 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.45.15.27210",
+      "templateHash": "6633271975832705368"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral",
+      "metadata": {
+        "description": "Azure region of the existing App Service plan and all new resources."
+      }
+    },
+    "appServicePlanName": {
+      "type": "string",
+      "defaultValue": "F1-linux",
+      "metadata": {
+        "description": "Name of the existing Linux App Service plan. The plan is reused, not created or changed."
+      }
+    },
+    "webAppName": {
+      "type": "string",
+      "defaultValue": "lk-keycloak",
+      "metadata": {
+        "description": "Globally unique App Service application name."
+      }
+    },
+    "keycloakVersion": {
+      "type": "string",
+      "defaultValue": "26.7.0",
+      "metadata": {
+        "description": "Pinned Keycloak container image version."
+      }
+    },
+    "sqlAdminLogin": {
+      "type": "string",
+      "defaultValue": "keycloakadmin",
+      "metadata": {
+        "description": "Azure SQL logical-server administrator login."
+      }
+    },
+    "sqlAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure SQL logical-server administrator password. Supply this through a secure deployment parameter."
+      }
+    },
+    "keycloakBootstrapAdminUsername": {
+      "type": "string",
+      "defaultValue": "admin",
+      "metadata": {
+        "description": "Temporary Keycloak bootstrap administrator username."
+      }
+    },
+    "keycloakBootstrapAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Temporary Keycloak bootstrap administrator password. Supply this through a secure deployment parameter."
+      }
+    },
+    "sqlDatabaseMaxSizeGB": {
+      "type": "int",
+      "defaultValue": 4,
+      "minValue": 1,
+      "maxValue": 32,
+      "metadata": {
+        "description": "Maximum Azure SQL database size in GiB. The confirmed PoC limit is 4 GiB."
+      }
+    },
+    "sqlAutoPauseDelayMinutes": {
+      "type": "int",
+      "defaultValue": 60,
+      "minValue": 60,
+      "metadata": {
+        "description": "Minutes without sessions or user CPU before Azure SQL serverless can auto-pause."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "workload": "keycloak-poc",
+        "environment": "production-poc",
+        "managedBy": "bicep"
+      },
+      "metadata": {
+        "description": "Common resource tags."
+      }
+    }
+  },
+  "variables": {
+    "keycloakImage": "[format('quay.io/keycloak/keycloak:{0}', parameters('keycloakVersion'))]",
+    "keycloakUrl": "[format('https://{0}.azurewebsites.net', parameters('webAppName'))]",
+    "sqlServerName": "[format('lk-keycloak-sql-{0}', uniqueString(subscription().id, resourceGroup().id))]",
+    "sqlDatabaseName": "keycloak",
+    "sqlDatabaseMaxSizeBytes": "[mul(mul(mul(parameters('sqlDatabaseMaxSizeGB'), 1024), 1024), 1024)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Sql/servers",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('sqlServerName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "administratorLogin": "[parameters('sqlAdminLogin')]",
+        "administratorLoginPassword": "[parameters('sqlAdminPassword')]",
+        "minimalTlsVersion": "1.2",
+        "publicNetworkAccess": "Enabled",
+        "restrictOutboundNetworkAccess": "Disabled",
+        "version": "12.0"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/firewallRules",
+      "apiVersion": "2023-08-01",
+      "name": "[format('{0}/{1}', variables('sqlServerName'), 'AllowAzureServices')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}/{1}', variables('sqlServerName'), variables('sqlDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "GP_S_Gen5_2",
+        "tier": "GeneralPurpose",
+        "family": "Gen5",
+        "capacity": 2
+      },
+      "properties": {
+        "autoPauseDelay": "[parameters('sqlAutoPauseDelayMinutes')]",
+        "collation": "Latin1_General_100_CI_AS_SC_UTF8",
+        "createMode": "Default",
+        "freeLimitExhaustionBehavior": "AutoPause",
+        "licenseType": "LicenseIncluded",
+        "maxSizeBytes": "[variables('sqlDatabaseMaxSizeBytes')]",
+        "minCapacity": "[json('0.5')]",
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local",
+        "useFreeLimit": true,
+        "zoneRedundant": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-11-01",
+      "name": "[parameters('webAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux,container",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "clientAffinityEnabled": false,
+        "enabled": true,
+        "httpsOnly": true,
+        "publicNetworkAccess": "Enabled",
+        "reserved": true,
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+        "siteConfig": {
+          "alwaysOn": false,
+          "appCommandLine": "start",
+          "appSettings": [
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8080"
+            },
+            {
+              "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",
+              "value": "1800"
+            },
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "KC_DB",
+              "value": "mssql"
+            },
+            {
+              "name": "KC_DB_URL",
+              "value": "[format('jdbc:sqlserver://{0}:1433;databaseName={1};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2025-01-01').fullyQualifiedDomainName, variables('sqlDatabaseName'))]"
+            },
+            {
+              "name": "KC_DB_USERNAME",
+              "value": "[parameters('sqlAdminLogin')]"
+            },
+            {
+              "name": "KC_DB_PASSWORD",
+              "value": "[parameters('sqlAdminPassword')]"
+            },
+            {
+              "name": "KC_DB_POOL_INITIAL_SIZE",
+              "value": "1"
+            },
+            {
+              "name": "KC_DB_POOL_MIN_SIZE",
+              "value": "1"
+            },
+            {
+              "name": "KC_DB_POOL_MAX_SIZE",
+              "value": "5"
+            },
+            {
+              "name": "KC_HOSTNAME",
+              "value": "[variables('keycloakUrl')]"
+            },
+            {
+              "name": "KC_HTTP_ENABLED",
+              "value": "true"
+            },
+            {
+              "name": "KC_PROXY_HEADERS",
+              "value": "xforwarded"
+            },
+            {
+              "name": "KC_BOOTSTRAP_ADMIN_USERNAME",
+              "value": "[parameters('keycloakBootstrapAdminUsername')]"
+            },
+            {
+              "name": "KC_BOOTSTRAP_ADMIN_PASSWORD",
+              "value": "[parameters('keycloakBootstrapAdminPassword')]"
+            },
+            {
+              "name": "KC_HEALTH_ENABLED",
+              "value": "true"
+            },
+            {
+              "name": "KC_HTTP_MANAGEMENT_HEALTH_ENABLED",
+              "value": "false"
+            },
+            {
+              "name": "KC_METRICS_ENABLED",
+              "value": "false"
+            },
+            {
+              "name": "KC_LOG_LEVEL",
+              "value": "INFO"
+            },
+            {
+              "name": "JAVA_OPTS_KC_HEAP",
+              "value": "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=60"
+            }
+          ],
+          "ftpsState": "Disabled",
+          "http20Enabled": true,
+          "httpLoggingEnabled": true,
+          "linuxFxVersion": "[format('DOCKER|{0}', variables('keycloakImage'))]",
+          "minTlsVersion": "1.2",
+          "remoteDebuggingEnabled": false,
+          "scmMinTlsVersion": "1.2",
+          "webSocketsEnabled": false
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers/firewallRules', variables('sqlServerName'), 'AllowAzureServices')]",
+        "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), variables('sqlDatabaseName'))]",
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[parameters('webAppName')]"
+    },
+    "webAppUrl": {
+      "type": "string",
+      "value": "[variables('keycloakUrl')]"
+    },
+    "oidcDiscoveryUrl": {
+      "type": "string",
+      "value": "[format('{0}/realms/master/.well-known/openid-configuration', variables('keycloakUrl'))]"
+    },
+    "sqlServerName": {
+      "type": "string",
+      "value": "[variables('sqlServerName')]"
+    },
+    "sqlServerHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2025-01-01').fullyQualifiedDomainName]"
+    },
+    "sqlDatabaseName": {
+      "type": "string",
+      "value": "[variables('sqlDatabaseName')]"
+    },
+    "sqlDatabaseMaxSizeGB": {
+      "type": "int",
+      "value": "[parameters('sqlDatabaseMaxSizeGB')]"
+    },
+    "appServicePlanResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+    }
+  }
+}

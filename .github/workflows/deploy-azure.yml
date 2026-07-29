@@ -1,0 +1,143 @@
+name: Deploy Keycloak to Azure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: keycloak-azure-deployment
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: keycloak
+
+jobs:
+  deploy:
+    name: Validate, deploy, and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify the existing free Linux plan
+        run: |
+          plan_location="$(az appservice plan show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name F1-linux \
+            --query location \
+            --output tsv)"
+          plan_sku="$(az appservice plan show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name F1-linux \
+            --query sku.name \
+            --output tsv)"
+          plan_is_linux="$(az appservice plan show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name F1-linux \
+            --query reserved \
+            --output tsv)"
+
+          if [ "$plan_location" != "swedencentral" ] || [ "$plan_sku" != "F1" ] || [ "$plan_is_linux" != "true" ]; then
+            echo "::error::F1-linux must be a Linux F1 plan in Sweden Central."
+            echo "Found location=$plan_location, sku=$plan_sku, linux=$plan_is_linux"
+            exit 1
+          fi
+
+      - name: Install the current Bicep CLI
+        run: az bicep install
+
+      - name: Compile Bicep
+        run: |
+          az bicep build \
+            --file main.bicep \
+            --outfile "$RUNNER_TEMP/azuredeploy.json"
+
+          jq --sort-keys 'del(.metadata._generator)' \
+            azuredeploy.json > "$RUNNER_TEMP/azuredeploy.checked.json"
+          jq --sort-keys 'del(.metadata._generator)' \
+            "$RUNNER_TEMP/azuredeploy.json" > "$RUNNER_TEMP/azuredeploy.generated.json"
+
+          if ! diff --unified \
+            "$RUNNER_TEMP/azuredeploy.checked.json" \
+            "$RUNNER_TEMP/azuredeploy.generated.json"; then
+            echo "::error::azuredeploy.json is stale. Regenerate it from main.bicep."
+            exit 1
+          fi
+
+      - name: Validate resource-group deployment
+        env:
+          AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
+          KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          az deployment group validate \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --parameters main.bicepparam
+
+      - name: Deploy infrastructure
+        id: deploy
+        env:
+          AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
+          KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}
+        run: |
+          deployment_name="keycloak-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          az deployment group create \
+            --name "$deployment_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --parameters main.bicepparam
+
+          web_app_url="$(az deployment group show \
+            --name "$deployment_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.outputs.webAppUrl.value \
+            --output tsv)"
+
+          oidc_discovery_url="$(az deployment group show \
+            --name "$deployment_name" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.outputs.oidcDiscoveryUrl.value \
+            --output tsv)"
+
+          echo "web_app_url=$web_app_url" >> "$GITHUB_OUTPUT"
+          echo "oidc_discovery_url=$oidc_discovery_url" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Keycloak
+        env:
+          OIDC_DISCOVERY_URL: ${{ steps.deploy.outputs.oidc_discovery_url }}
+        run: |
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent --show-error "$OIDC_DISCOVERY_URL" > /dev/null; then
+              echo "Keycloak is ready at $OIDC_DISCOVERY_URL"
+              exit 0
+            fi
+
+            echo "Attempt $attempt/45: Keycloak is not ready; retrying in 20 seconds."
+            sleep 20
+          done
+
+          echo "::error::Keycloak did not become ready within 15 minutes."
+          exit 1
+
+      - name: Write deployment summary
+        env:
+          WEB_APP_URL: ${{ steps.deploy.outputs.web_app_url }}
+          OIDC_DISCOVERY_URL: ${{ steps.deploy.outputs.oidc_discovery_url }}
+        run: |
+          {
+            echo "## Azure deployment complete"
+            echo
+            echo "- Keycloak: $WEB_APP_URL"
+            echo "- OIDC discovery: $OIDC_DISCOVERY_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

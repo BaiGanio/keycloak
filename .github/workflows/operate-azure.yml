@@ -1,0 +1,112 @@
+name: Operate Keycloak in Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Start, stop, or inspect the Keycloak application and Azure SQL database
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: keycloak-azure-operation
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: keycloak
+  AZURE_WEB_APP_NAME: lk-keycloak
+  AZURE_SQL_DATABASE_NAME: keycloak
+
+jobs:
+  operate:
+    name: ${{ inputs.operation }} Azure resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Locate Azure SQL logical server
+        id: resources
+        run: |
+          sql_server_name="$(az sql server list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[?tags.workload == 'keycloak-poc'].name | [0]" \
+            --output tsv)"
+
+          if [ -z "$sql_server_name" ]; then
+            echo "::error::No Azure SQL server tagged workload=keycloak-poc was found."
+            exit 1
+          fi
+
+          echo "sql_server_name=$sql_server_name" >> "$GITHUB_OUTPUT"
+
+      - name: Start Keycloak
+        if: inputs.operation == 'start'
+        run: |
+          az webapp start \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEB_APP_NAME"
+
+          oidc_discovery_url="https://${AZURE_WEB_APP_NAME}.azurewebsites.net/realms/master/.well-known/openid-configuration"
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent --show-error "$oidc_discovery_url" > /dev/null; then
+              echo "Keycloak is ready at $oidc_discovery_url"
+              exit 0
+            fi
+
+            echo "Attempt $attempt/45: Keycloak or Azure SQL is not ready; retrying in 20 seconds."
+            sleep 20
+          done
+
+          echo "::error::Keycloak did not become ready within 15 minutes."
+          exit 1
+
+      - name: Stop Keycloak
+        if: inputs.operation == 'stop'
+        run: |
+          az webapp stop \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEB_APP_NAME"
+
+          echo "Keycloak is stopped. Azure SQL will auto-pause after 60 idle minutes."
+
+      - name: Show resource status
+        env:
+          AZURE_SQL_SERVER_NAME: ${{ steps.resources.outputs.sql_server_name }}
+        run: |
+          web_app_state="$(az webapp show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEB_APP_NAME" \
+            --query state \
+            --output tsv)"
+
+          sql_database_state="$(az sql db show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "$AZURE_SQL_SERVER_NAME" \
+            --name "$AZURE_SQL_DATABASE_NAME" \
+            --query status \
+            --output tsv)"
+
+          {
+            echo "## Azure resource status"
+            echo
+            echo "| Resource | State |"
+            echo "| --- | --- |"
+            echo "| App Service \`$AZURE_WEB_APP_NAME\` | $web_app_state |"
+            echo "| Azure SQL \`$AZURE_SQL_DATABASE_NAME\` | $sql_database_state |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

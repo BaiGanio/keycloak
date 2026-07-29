@@ -1,225 +1,222 @@
-param location string = resourceGroup().location
-param postgresAdminLogin string = 'keycloakadmin'
-param keycloakVersion string = '23.0.7'
-param containerAppMinReplicas int = 2
-param containerAppMaxReplicas int = 5
-param environment string = 'prod'
+@description('Azure region of the existing App Service plan and all new resources.')
+param location string = 'swedencentral'
+
+@description('Name of the existing Linux App Service plan. The plan is reused, not created or changed.')
+param appServicePlanName string = 'F1-linux'
+
+@description('Globally unique App Service application name.')
+param webAppName string = 'lk-keycloak'
+
+@description('Pinned Keycloak container image version.')
+param keycloakVersion string = '26.7.0'
+
+@description('Azure SQL logical-server administrator login.')
+param sqlAdminLogin string = 'keycloakadmin'
 
 @secure()
-param postgresAdminPassword string
+@description('Azure SQL logical-server administrator password. Supply this through a secure deployment parameter.')
+param sqlAdminPassword string
+
+@description('Temporary Keycloak bootstrap administrator username.')
+param keycloakBootstrapAdminUsername string = 'admin'
 
 @secure()
-param keycloakAdminPassword string
+@description('Temporary Keycloak bootstrap administrator password. Supply this through a secure deployment parameter.')
+param keycloakBootstrapAdminPassword string
 
-// Key Vault for secrets management
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: 'kv-keycloak-${uniqueString(resourceGroup().id)}'
+@minValue(1)
+@maxValue(32)
+@description('Maximum Azure SQL database size in GiB. The confirmed PoC limit is 4 GiB.')
+param sqlDatabaseMaxSizeGB int = 4
+
+@minValue(60)
+@description('Minutes without sessions or user CPU before Azure SQL serverless can auto-pause.')
+param sqlAutoPauseDelayMinutes int = 60
+
+@description('Common resource tags.')
+param tags object = {
+  workload: 'keycloak-poc'
+  environment: 'production-poc'
+  managedBy: 'bicep'
+}
+
+var keycloakImage = 'quay.io/keycloak/keycloak:${keycloakVersion}'
+var keycloakUrl = 'https://${webAppName}.azurewebsites.net'
+var sqlServerName = 'lk-keycloak-sql-${uniqueString(subscription().id, resourceGroup().id)}'
+var sqlDatabaseName = 'keycloak'
+var sqlDatabaseMaxSizeBytes = sqlDatabaseMaxSizeGB * 1024 * 1024 * 1024
+
+resource appServicePlan 'Microsoft.Web/serverfarms@2024-11-01' existing = {
+  name: appServicePlanName
+}
+
+resource sqlServer 'Microsoft.Sql/servers@2025-01-01' = {
+  name: sqlServerName
   location: location
+  tags: tags
   properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: containerAppIdentity.properties.principalId
-        permissions: {
-          secrets: ['get', 'list']
-        }
-      }
-    ]
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
+    administratorLogin: sqlAdminLogin
+    administratorLoginPassword: sqlAdminPassword
+    minimalTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
+    restrictOutboundNetworkAccess: 'Disabled'
+    version: '12.0'
   }
 }
 
-// Store secrets in Key Vault
-resource postgresPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: keyVault
-  name: 'postgres-password'
-  properties: {
-    value: postgresAdminPassword
-  }
-}
-
-resource keycloakAdminSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: keyVault
-  name: 'keycloak-admin-password'
-  properties: {
-    value: keycloakAdminPassword
-  }
-}
-
-// Managed Identity for Container App
-resource containerAppIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: 'identity-keycloak-app'
-  location: location
-}
-
-// PostgreSQL Flexible Server with production settings
-resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2022-12-01' = {
-  name: 'keycloak-db-${uniqueString(resourceGroup().id)}'
-  location: location
-  sku: {
-    name: 'Standard_B2s'
-    tier: 'Burstable'
-  }
-  properties: {
-    administratorLogin: postgresAdminLogin
-    administratorLoginPassword: postgresAdminPassword
-    version: '15'
-    storage: {
-      storageSizeGB: 128
-    }
-    backup: {
-      backupRetentionDays: 30
-      geoRedundantBackup: 'Enabled'
-    }
-    highAvailability: {
-      mode: 'ZoneRedundant'
-    }
-  }
-}
-
-// PostgreSQL Firewall Rule - Allow Container App only
-resource postgresFirewall 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2022-12-01' = {
-  parent: postgres
-  name: 'AllowContainerApp'
+resource allowAzureServices 'Microsoft.Sql/servers/firewallRules@2023-08-01' = {
+  parent: sqlServer
+  name: 'AllowAzureServices'
   properties: {
     startIpAddress: '0.0.0.0'
-    endIpAddress: '255.255.255.255'
-    // Note: In production, restrict this to specific IPs or use VNET integration
+    endIpAddress: '0.0.0.0'
   }
 }
 
-// PostgreSQL Database
-resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2022-12-01' = {
-  parent: postgres
-  name: 'keycloak'
-}
-
-// Container App Environment with monitoring
-resource containerAppEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
-  name: 'keycloak-env-${environment}'
+resource keycloakDatabase 'Microsoft.Sql/servers/databases@2025-01-01' = {
+  parent: sqlServer
+  name: sqlDatabaseName
   location: location
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalytics.properties.customerId
-        sharedKey: listKeys(logAnalytics.id, logAnalytics.apiVersion).primarySharedKey
-      }
-    }
-  }
-}
-
-// Log Analytics Workspace
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: 'law-keycloak-${uniqueString(resourceGroup().id)}'
-  location: location
-  properties: {
-    sku: {
-      name: 'PerGB2018'
-    }
-  }
-}
-
-// Application Insights
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: 'ai-keycloak-${uniqueString(resourceGroup().id)}'
-  location: location
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    WorkspaceResourceId: logAnalytics.id
-  }
-}
-
-// Keycloak Container App with production settings
-resource keycloakApp 'Microsoft.App/containerApps@2023-05-01' = {
-  name: 'keycloak-${environment}'
-  location: location
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${containerAppIdentity.id}': {}
-    }
+  tags: tags
+  sku: {
+    name: 'GP_S_Gen5_2'
+    tier: 'GeneralPurpose'
+    family: 'Gen5'
+    capacity: 2
   }
   properties: {
-    managedEnvironmentId: containerAppEnv.id
-    configuration: {
-      ingress: {
-        external: true
-        targetPort: 8080
-        transport: 'auto'
-        allowInsecure: false
-      }
-      registries: []
-      secrets: [
+    autoPauseDelay: sqlAutoPauseDelayMinutes
+    collation: 'Latin1_General_100_CI_AS_SC_UTF8'
+    createMode: 'Default'
+    freeLimitExhaustionBehavior: 'AutoPause'
+    licenseType: 'LicenseIncluded'
+    maxSizeBytes: sqlDatabaseMaxSizeBytes
+    minCapacity: json('0.5')
+    readScale: 'Disabled'
+    requestedBackupStorageRedundancy: 'Local'
+    useFreeLimit: true
+    zoneRedundant: false
+  }
+}
+
+resource keycloakApp 'Microsoft.Web/sites@2024-11-01' = {
+  name: webAppName
+  location: location
+  kind: 'app,linux,container'
+  tags: tags
+  properties: {
+    clientAffinityEnabled: false
+    enabled: true
+    httpsOnly: true
+    publicNetworkAccess: 'Enabled'
+    reserved: true
+    serverFarmId: appServicePlan.id
+    siteConfig: {
+      alwaysOn: false
+      appCommandLine: 'start'
+      appSettings: [
         {
-          name: 'postgres-password'
-          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/postgres-password'
-          identity: containerAppIdentity.id
+          name: 'WEBSITES_PORT'
+          value: '8080'
         }
         {
-          name: 'keycloak-admin-password'
-          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/keycloak-admin-password'
-          identity: containerAppIdentity.id
+          name: 'WEBSITES_CONTAINER_START_TIME_LIMIT'
+          value: '1800'
+        }
+        {
+          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
+          value: 'false'
+        }
+        {
+          name: 'KC_DB'
+          value: 'mssql'
+        }
+        {
+          name: 'KC_DB_URL'
+          value: 'jdbc:sqlserver://${sqlServer.properties.fullyQualifiedDomainName}:1433;databaseName=${sqlDatabaseName};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30'
+        }
+        {
+          name: 'KC_DB_USERNAME'
+          value: sqlAdminLogin
+        }
+        {
+          name: 'KC_DB_PASSWORD'
+          value: sqlAdminPassword
+        }
+        {
+          name: 'KC_DB_POOL_INITIAL_SIZE'
+          value: '1'
+        }
+        {
+          name: 'KC_DB_POOL_MIN_SIZE'
+          value: '1'
+        }
+        {
+          name: 'KC_DB_POOL_MAX_SIZE'
+          value: '5'
+        }
+        {
+          name: 'KC_HOSTNAME'
+          value: keycloakUrl
+        }
+        {
+          name: 'KC_HTTP_ENABLED'
+          value: 'true'
+        }
+        {
+          name: 'KC_PROXY_HEADERS'
+          value: 'xforwarded'
+        }
+        {
+          name: 'KC_BOOTSTRAP_ADMIN_USERNAME'
+          value: keycloakBootstrapAdminUsername
+        }
+        {
+          name: 'KC_BOOTSTRAP_ADMIN_PASSWORD'
+          value: keycloakBootstrapAdminPassword
+        }
+        {
+          name: 'KC_HEALTH_ENABLED'
+          value: 'true'
+        }
+        {
+          name: 'KC_HTTP_MANAGEMENT_HEALTH_ENABLED'
+          value: 'false'
+        }
+        {
+          name: 'KC_METRICS_ENABLED'
+          value: 'false'
+        }
+        {
+          name: 'KC_LOG_LEVEL'
+          value: 'INFO'
+        }
+        {
+          name: 'JAVA_OPTS_KC_HEAP'
+          value: '-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=60'
         }
       ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'keycloak'
-          image: 'quay.io/keycloak/keycloak:${keycloakVersion}'
-          args: ['start']
-          resources: {
-            cpu: '0.5'
-            memory: '1Gi'
-          }
-          env: [
-            { name: 'KC_DB', value: 'postgres' }
-            { name: 'KC_DB_URL', value: 'jdbc:postgresql://${postgres.properties.fullyQualifiedDomainName}:5432/keycloak' }
-            { name: 'KC_DB_USERNAME', value: postgresAdminLogin }
-            { name: 'KC_DB_PASSWORD', secretRef: 'postgres-password' }
-            { name: 'KC_HOSTNAME', value: 'keycloak.example.com' } // Change to your domain
-            { name: 'KC_HOSTNAME_STRICT', value: 'true' }
-            { name: 'KC_HOSTNAME_STRICT_HTTPS', value: 'true' }
-            { name: 'KC_PROXY', value: 'edge' }
-            { name: 'KC_PROXY_ADDRESS_FORWARDING', value: 'true' }
-            { name: 'KC_BOOTSTRAP_ADMIN_USERNAME', value: 'admin' }
-            { name: 'KC_BOOTSTRAP_ADMIN_PASSWORD', secretRef: 'keycloak-admin-password' }
-            { name: 'KC_LOG_LEVEL', value: 'INFO' }
-            { name: 'KC_METRICS_ENABLED', value: 'true' }
-          ]
-        }
-      ]
-      scale: {
-        minReplicas: containerAppMinReplicas
-        maxReplicas: containerAppMaxReplicas
-        rules: [
-          {
-            name: 'http-requests'
-            http: {
-              metadata: {
-                concurrentRequests: '100'
-              }
-            }
-          }
-        ]
-      }
+      ftpsState: 'Disabled'
+      http20Enabled: true
+      httpLoggingEnabled: true
+      linuxFxVersion: 'DOCKER|${keycloakImage}'
+      minTlsVersion: '1.2'
+      remoteDebuggingEnabled: false
+      scmMinTlsVersion: '1.2'
+      webSocketsEnabled: false
     }
   }
   dependsOn: [
-    postgresDatabase
+    allowAzureServices
+    keycloakDatabase
   ]
 }
 
-// Outputs
-output keycloakUrl string = 'https://${keycloakApp.properties.configuration.ingress.fqdn}'
-output postgresHost string = postgres.properties.fullyQualifiedDomainName
-output logAnalyticsId string = logAnalytics.id
-output appInsightsInstrumentationKey string = appInsights.properties.InstrumentationKey
+output webAppName string = keycloakApp.name
+output webAppUrl string = keycloakUrl
+output oidcDiscoveryUrl string = '${keycloakUrl}/realms/master/.well-known/openid-configuration'
+output sqlServerName string = sqlServer.name
+output sqlServerHost string = sqlServer.properties.fullyQualifiedDomainName
+output sqlDatabaseName string = keycloakDatabase.name
+output sqlDatabaseMaxSizeGB int = sqlDatabaseMaxSizeGB
+output appServicePlanResourceId string = appServicePlan.id
