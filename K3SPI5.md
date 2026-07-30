@@ -312,6 +312,12 @@ container security context. If PostgreSQL reports `initdb: could not change
 permissions of directory "/var/lib/postgresql/data"`, confirm that the
 deployed StatefulSet still contains this `PGDATA` setting.
 
+Keycloak consumes the two Secret-backed passwords through the `KCRAW_`
+environment-variable prefix. Keycloak otherwise evaluates expressions in
+ordinary `KC_` values and can silently alter passwords containing `$`;
+`KCRAW_` preserves the exact credential bytes stored in the Kubernetes
+Secret.
+
 ## Cloudflare Tunnel and TLS boundary
 
 The configured public hostname is `auth.baiganio.io`. Cloudflare terminates

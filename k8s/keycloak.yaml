@@ -58,7 +58,7 @@ spec:
               value: jdbc:postgresql://postgres:5432/keycloak
             - name: KC_DB_USERNAME
               value: keycloak
-            - name: KC_DB_PASSWORD
+            - name: KCRAW_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: keycloak-credentials
@@ -77,7 +77,7 @@ spec:
               value: xforwarded
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
-            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+            - name: KCRAW_BOOTSTRAP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: keycloak-credentials
