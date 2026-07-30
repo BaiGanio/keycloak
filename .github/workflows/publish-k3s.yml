@@ -78,7 +78,7 @@ jobs:
 
       - name: Notify Flux on the Pi
         env:
-          FLUX_WEBHOOK_URL: ${{ vars.FLUX_WEBHOOK_URL }}
+          FLUX_WEBHOOK_URL: ${{ secrets.FLUX_WEBHOOK_URL }}
           FLUX_WEBHOOK_TOKEN: ${{ secrets.FLUX_WEBHOOK_TOKEN }}
         run: |
           if [ -z "$FLUX_WEBHOOK_URL" ] && [ -z "$FLUX_WEBHOOK_TOKEN" ]; then
