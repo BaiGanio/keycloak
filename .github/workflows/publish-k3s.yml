@@ -76,33 +76,6 @@ jobs:
             "$OCI_REPOSITORY:$GITHUB_SHA" \
             --tag production
 
-      - name: Notify Flux on the Pi
-        env:
-          FLUX_WEBHOOK_URL: ${{ secrets.FLUX_WEBHOOK_URL }}
-          FLUX_WEBHOOK_TOKEN: ${{ secrets.FLUX_WEBHOOK_TOKEN }}
-        run: |
-          if [ -z "$FLUX_WEBHOOK_URL" ] && [ -z "$FLUX_WEBHOOK_TOKEN" ]; then
-            echo "Flux webhook is not configured; polling will detect the artifact."
-            exit 0
-          fi
-
-          if [ -z "$FLUX_WEBHOOK_URL" ] || [ -z "$FLUX_WEBHOOK_TOKEN" ]; then
-            echo "::error::Both FLUX_WEBHOOK_URL and FLUX_WEBHOOK_TOKEN must be configured."
-            exit 1
-          fi
-
-          payload="{\"revision\":\"$GITHUB_SHA\"}"
-          signature="$(printf '%s' "$payload" |
-            openssl dgst -sha256 -hmac "$FLUX_WEBHOOK_TOKEN" -binary |
-            xxd -plain -cols 256)"
-
-          curl --fail --silent --show-error \
-            --request POST \
-            --header 'Content-Type: application/json' \
-            --header "X-Signature: sha256=$signature" \
-            --data "$payload" \
-            "$FLUX_WEBHOOK_URL"
-
       - name: Write publication summary
         run: |
           {
@@ -111,4 +84,5 @@ jobs:
             echo "- Revision: \`$GITHUB_SHA\`"
             echo "- OCI source: \`$OCI_REPOSITORY:production\`"
             echo "- The Pi is not a GitHub Actions runner."
+            echo "- Flux polls for this artifact on its own five-minute interval."
           } >> "$GITHUB_STEP_SUMMARY"

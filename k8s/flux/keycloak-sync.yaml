@@ -33,39 +33,3 @@ spec:
     kind: OCIRepository
     name: keycloak
   path: ./
----
-apiVersion: notification.toolkit.fluxcd.io/v1
-kind: Receiver
-metadata:
-  name: keycloak
-  namespace: flux-system
-spec:
-  type: generic-hmac
-  secretRef:
-    name: keycloak-webhook-token
-  resources:
-    - apiVersion: source.toolkit.fluxcd.io/v1
-      kind: OCIRepository
-      name: keycloak
-      namespace: flux-system
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: keycloak-flux-webhook
-  namespace: flux-system
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  ingressClassName: traefik
-  rules:
-    - host: deploy.baiganio.io
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: webhook-receiver
-                port:
-                  number: 80

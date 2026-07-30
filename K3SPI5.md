@@ -30,9 +30,9 @@ There are two realistic ways to bridge that gap:
 
 This repository uses option 2. Flux is the "pull" half of that split — it is
 what lets the Pi remain a client with no exposed control plane and no inbound
-CI credentials, while still getting hands-off deployments on every push. A
-webhook nudges Flux to reconcile immediately after publish; a five-minute
-polling interval is the fallback if that webhook is ever missed.
+CI credentials, while still getting hands-off deployments on every push. Flux
+polls the OCI repository on a five-minute interval, so every push is picked up
+and deployed automatically with no inbound connection into the Pi.
 
 ## Check where the existing Cloudflare Tunnel runs
 
@@ -49,7 +49,11 @@ Cloudflare configuration files.
 
 The inspection established that `cloudflared` 2026.7.3 is installed as an
 enabled and active host systemd service, not as a Docker container or
-Kubernetes workload.
+Kubernetes workload. The Cloudflare dashboard also reports that this tunnel is
+locally managed. Its hostname routes therefore live in the Pi's local
+`cloudflared` configuration file and cannot be changed from the dashboard's
+Tunnel routes page. The systemd unit runs as user `lk`, starts tunnel
+`3i-atlas`, and loads `/home/lk/.cloudflared/config.yml`.
 
 The observed cluster is:
 
@@ -100,14 +104,13 @@ GitHub-hosted runner:
 2. renders `k8s/` into one Kubernetes YAML bundle;
 3. publishes the bundle to
    `ghcr.io/baiganio/keycloak-manifests:<commit-sha>`;
-4. moves the `production` OCI tag to that exact artifact;
-5. sends an authenticated webhook after publication.
+4. moves the `production` OCI tag to that exact artifact.
 
-Flux runs as ordinary controllers inside k3s. The webhook tells Flux to
-reconcile immediately; Flux pulls the ready OCI artifact from GHCR and applies
-it. A five-minute polling interval provides recovery if a webhook is missed.
-The Pi downloads only the OCI deployment bundle and the digest-pinned
-application images.
+Flux runs as ordinary controllers inside k3s and polls that OCI repository on
+a five-minute interval. When it sees the `production` tag move, it pulls the
+ready artifact from GHCR and applies it — no push mechanism into the cluster
+exists, and none is needed. The Pi downloads only the OCI deployment bundle
+and the digest-pinned application images.
 
 ### One-time Flux and credential bootstrap
 
@@ -148,51 +151,6 @@ printf 'postgres-password=%s\nbootstrap-admin-password=%s\n' \
 unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
 ```
 
-Generate a separate 32-byte webhook token on a trusted Mac and copy it directly
-to the clipboard without displaying it:
-
-```bash
-openssl rand -hex 32 | tr -d '\n' | pbcopy
-```
-
-This is an independent shared secret, not a GitHub personal access token,
-Keycloak password, or database password. In the GitHub repository, open
-**Settings → Environments → `pi-production` → Environment secrets → Add
-secret**. Name the secret `FLUX_WEBHOOK_TOKEN` and paste the clipboard value
-into it.
-
-Then SSH to the Pi and enter that same value silently:
-
-```bash
-read -rsp 'Flux webhook token: ' FLUX_WEBHOOK_TOKEN
-printf '\n'
-
-printf 'token=%s\n' "$FLUX_WEBHOOK_TOKEN" |
-  sudo kubectl --namespace flux-system create secret generic \
-    keycloak-webhook-token \
-    --from-env-file=/dev/stdin
-
-unset FLUX_WEBHOOK_TOKEN
-```
-
-At the `Flux webhook token:` prompt, paste the value and press Enter. The
-terminal intentionally displays no characters. Confirm that the Kubernetes
-Secret exists without printing its value:
-
-```bash
-sudo kubectl --namespace flux-system get secret keycloak-webhook-token
-```
-
-The expected Secret has type `Opaque` and one data entry. Clear the Mac
-clipboard after both copies are configured:
-
-```bash
-printf '' | pbcopy
-```
-
-Never paste this token into an issue, chat, screenshot, committed file, or
-command-line argument.
-
 Apply only the Flux source configuration directly from GitHub:
 
 ```bash
@@ -201,47 +159,90 @@ curl --fail --silent --show-error --location \
   sudo kubectl apply -f -
 ```
 
-Flux exposes its authenticated receiver through the
-`deploy.baiganio.io` Ingress. Add this Cloudflare Tunnel route:
+Flux syncs from GHCR directly and needs no public ingress of its own. The only
+new public hostname this deployment needs is `auth.baiganio.io`, routed
+through the same locally managed Cloudflare Tunnel. Because the tunnel is
+locally managed, add the hostname mapping on the Pi rather than in the
+Cloudflare Tunnel dashboard.
 
-```text
-Public hostname: deploy.baiganio.io
-Service:         http://127.0.0.1:80
-```
-
-Get the receiver's unguessable path:
+The existing configuration already has an `ingress:` list for SSH, TCP, and
+HTTP services followed by an `http_status:404` catch-all. Before editing, the
+rule check for `auth.baiganio.io` matches that catch-all, confirming that the
+hostname does not yet have an explicit route:
 
 ```bash
-sudo kubectl --namespace flux-system get receiver keycloak \
-  --output=jsonpath='{.status.webhookPath}{"\n"}'
+cloudflared tunnel \
+  --config /home/lk/.cloudflared/config.yml \
+  ingress rule https://auth.baiganio.io
 ```
 
-Save `https://deploy.baiganio.io` plus that path as the
-`FLUX_WEBHOOK_URL` secret in the same GitHub environment. From then on, every
-relevant push publishes and deploys automatically. No runner, repository
-checkout, or application deployment command runs on the Pi.
+Make a one-time backup, then open the user-owned configuration without `sudo`:
 
-"Local target URL" means the private service to which Cloudflare sends requests
-after accepting traffic for the public hostname. For example:
+```bash
+cp --no-clobber \
+  /home/lk/.cloudflared/config.yml \
+  /home/lk/.cloudflared/config.yml.before-keycloak
+
+nano /home/lk/.cloudflared/config.yml
+```
+
+Under the existing `ingress:` list, insert this rule immediately before the
+final `- service: http_status:404` rule:
+
+```yaml
+  - hostname: auth.baiganio.io
+    service: http://localhost:80
+```
+
+Merge the rule into the existing list; do not replace the file or remove its
+`tunnel`, `credentials-file`, existing SSH/TCP/HTTP hostname rules, or final
+catch-all. Rule order matters because `cloudflared` uses the first match, and
+the catch-all must remain last. The service is plain local HTTP, so no origin
+certificate or `noTLSVerify` setting is needed; preserve the incoming
+`auth.baiganio.io` Host header by not setting an `httpHostHeader` override.
+
+Save and exit Nano, then validate the configuration and confirm the hostname
+selects its new rule before restarting the service:
+
+```bash
+cloudflared tunnel \
+  --config /home/lk/.cloudflared/config.yml \
+  ingress validate
+
+cloudflared tunnel \
+  --config /home/lk/.cloudflared/config.yml \
+  ingress rule https://auth.baiganio.io
+
+sudo systemctl restart cloudflared
+sudo systemctl status cloudflared --no-pager
+```
+
+Create the public DNS mapping separately. The tunnel is named `3i-atlas`; run
+the command as `lk` so `cloudflared` can use the account certificate in that
+user's configuration directory:
+
+```bash
+cloudflared tunnel route dns 3i-atlas auth.baiganio.io
+```
+
+If that command reports a missing account certificate, add the record in the
+Cloudflare dashboard under **baiganio.io → DNS → Records → Add record**:
 
 ```text
-Public hostname: auth.baiganio.io
-Local service:   http://127.0.0.1:80
+Type:         CNAME
+Name:         auth
+Target:       <tunnel-UUID>.cfargotunnel.com
+Proxy status: Proxied
+TTL:          Auto
 ```
 
-For a remotely managed tunnel, sign in to the Cloudflare dashboard and open
-**Zero Trust → Networks → Connectors → Cloudflare Tunnels**, choose the tunnel,
-and add or inspect its published application route:
+The tunnel UUID is the non-secret `tunnel:` value in the local configuration;
+it is not the credential JSON contents.
 
-```text
-Public hostname: auth.baiganio.io
-Service:         http://127.0.0.1:80
-```
+From then on, every relevant push publishes and deploys automatically. No
+runner, repository checkout, or application deployment command runs on the Pi.
 
-The incoming `Host` header should remain `auth.baiganio.io`; set the route's
-HTTP Host Header origin parameter to that value if another value is configured.
-No origin certificate or `noTLSVerify` setting is needed for this local HTTP
-hop. After saving the route, verify the public endpoint:
+Verify the public endpoint:
 
 ```bash
 curl --fail --show-error \
@@ -251,17 +252,6 @@ curl --fail --show-error \
 Then open <https://auth.baiganio.io/admin/> and sign in as `admin` with the
 temporary bootstrap password. Create and verify a permanent administrator
 before deleting the temporary account.
-
-For a locally managed tunnel, this command reports the matching ingress rule
-without displaying the tunnel credential:
-
-```bash
-sudo cloudflared tunnel ingress rule https://auth.baiganio.io
-```
-
-If it reports that no configuration file or rule exists, configure the route
-later rather than inventing one now. Do not paste `systemctl cat cloudflared`
-output because a remotely managed service unit may contain its tunnel token.
 
 ## First architecture
 
@@ -279,7 +269,6 @@ flowchart LR
     prepare["GitHub-hosted job<br/>checkout + kustomize"]
     artifact["GHCR OCI bundle<br/>revision-specific + production tag"]
     flux["Flux in k3s<br/>pull + reconcile"]
-    hook["Authenticated webhook<br/>deploy.baiganio.io"]
     registry["Upstream registries<br/>digest-pinned ARM64 images"]
 
     user -- "HTTPS" --> cloudflare
@@ -289,9 +278,7 @@ flowchart LR
     keycloak --> postgres
     github --> prepare
     prepare --> artifact
-    prepare -. "notify after publish" .-> hook
-    hook --> flux
-    flux -- "pull ready bundle" --> artifact
+    flux -- "poll every 5m, pull ready bundle" --> artifact
     flux -. "server-side reconcile" .-> keycloak
     registry -. "container image pulls" .-> keycloak
     registry -. "container image pulls" .-> postgres
@@ -341,8 +328,8 @@ immutable tag or digest before the deployment bundle is published.
 
 GitHub Actions has no Kubernetes credential and cannot access the Pi's
 Kubernetes API. Flux has no repository checkout and pulls only the published
-OCI artifact. The HMAC-authenticated receiver requests an immediate pull after
-publication; periodic reconciliation remains the source of eventual recovery.
+OCI artifact, on its own five-minute reconciliation schedule — there is no
+push mechanism into the cluster.
 
 Do not use the mutable `latest` tag. A deployment must identify the exact image
 that was built, making its state understandable and rollback possible.
@@ -350,10 +337,9 @@ that was built, making its state understandable and rollback possible.
 ## Secrets boundary
 
 Database and Keycloak credentials exist only in the Kubernetes Secret created
-during cluster bootstrap; GitHub never receives them. The separate webhook
-token exists in both the Kubernetes Receiver Secret and the `pi-production`
-GitHub environment. Running `kubectl get secret ... -o yaml` does not safely
-reveal or audit a secret; its values are merely base64-encoded.
+during cluster bootstrap; GitHub never receives them. Running
+`kubectl get secret ... -o yaml` does not safely reveal or audit a secret; its
+values are merely base64-encoded.
 
 SOPS, Sealed Secrets, External Secrets, and a PostgreSQL operator are reasonable
 later options for automating secret rotation and database operations.
