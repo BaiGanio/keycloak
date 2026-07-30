@@ -96,8 +96,7 @@ jobs:
             openssl dgst -sha256 -hmac "$FLUX_WEBHOOK_TOKEN" -binary |
             xxd -plain -cols 256)"
 
-          curl --silent --show-error \
-            --write-out '\nDEBUG http_status=%{http_code}\n' \
+          curl --fail --silent --show-error \
             --request POST \
             --header 'Content-Type: application/json' \
             --header "X-Signature: sha256=$signature" \
