@@ -148,9 +148,20 @@ printf 'postgres-password=%s\nbootstrap-admin-password=%s\n' \
 unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
 ```
 
-Generate a separate webhook token, save it as the `FLUX_WEBHOOK_TOKEN` secret
-in the GitHub `pi-production` environment, then enter that same value silently
-on the Pi:
+Generate a separate 32-byte webhook token on a trusted Mac and copy it directly
+to the clipboard without displaying it:
+
+```bash
+openssl rand -hex 32 | tr -d '\n' | pbcopy
+```
+
+This is an independent shared secret, not a GitHub personal access token,
+Keycloak password, or database password. In the GitHub repository, open
+**Settings → Environments → `pi-production` → Environment secrets → Add
+secret**. Name the secret `FLUX_WEBHOOK_TOKEN` and paste the clipboard value
+into it.
+
+Then SSH to the Pi and enter that same value silently:
 
 ```bash
 read -rsp 'Flux webhook token: ' FLUX_WEBHOOK_TOKEN
@@ -163,6 +174,24 @@ printf 'token=%s\n' "$FLUX_WEBHOOK_TOKEN" |
 
 unset FLUX_WEBHOOK_TOKEN
 ```
+
+At the `Flux webhook token:` prompt, paste the value and press Enter. The
+terminal intentionally displays no characters. Confirm that the Kubernetes
+Secret exists without printing its value:
+
+```bash
+sudo kubectl --namespace flux-system get secret keycloak-webhook-token
+```
+
+The expected Secret has type `Opaque` and one data entry. Clear the Mac
+clipboard after both copies are configured:
+
+```bash
+printf '' | pbcopy
+```
+
+Never paste this token into an issue, chat, screenshot, committed file, or
+command-line argument.
 
 Apply only the Flux source configuration directly from GitHub:
 
