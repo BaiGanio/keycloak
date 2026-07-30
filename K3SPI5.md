@@ -303,6 +303,15 @@ PostgreSQL is not exposed outside the cluster. Keycloak requests 1 GiB of
 memory and is limited to 2 GiB; PostgreSQL requests 256 MiB and is limited to
 1 GiB, leaving capacity for k3s and the Pi's other workloads.
 
+PostgreSQL deliberately sets `PGDATA` to
+`/var/lib/postgresql/data/pgdata`, one level below the PVC mount. The
+`local-path` provisioner creates the mount root with ownership that the
+non-root PostgreSQL process cannot change; using a child directory lets
+PostgreSQL create and own its database directory without weakening the
+container security context. If PostgreSQL reports `initdb: could not change
+permissions of directory "/var/lib/postgresql/data"`, confirm that the
+deployed StatefulSet still contains this `PGDATA` setting.
+
 ## Cloudflare Tunnel and TLS boundary
 
 The configured public hostname is `auth.baiganio.io`. Cloudflare terminates
