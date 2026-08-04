@@ -18,40 +18,27 @@ flowchart LR
         keycloak <--> kcdb
     end
 
-    subgraph app1["App 1"]
-        client1["Client<br/>(web / mobile)"]
-        api1["Protected API"]
-        db1[("App 1 database")]
-        client1 -- "Bearer access token" --> api1
-        api1 --> db1
+    subgraph apps["BaiGanio applications"]
+        swagger["Swagger UI<br/>bgapi-swagger"]
+        baiganio["BaiGanio<br/>baiganio-web"]
+        cosmic["Cosmic Origins<br/>cosmic-origins-web"]
+        swagger -- "Bearer access token" --> api
+        baiganio -- "Bearer access token" --> api
+        cosmic -- "Bearer access token" --> api
     end
 
-    subgraph app2["App 2"]
-        client2["Client<br/>(web / mobile)"]
-        api2["Protected API"]
-        db2[("App 2 database")]
-        client2 -- "Bearer access token" --> api2
-        api2 --> db2
-    end
+    api["bgapi<br/>bgapi-api"]
+    db[("Application database")]
+    api --> db
 
-    subgraph appN["App N ..."]
-        clientN["Client"]
-        apiN["Protected API"]
-        dbN[("App N database")]
-        clientN -- "Bearer access token" --> apiN
-        apiN --> dbN
-    end
+    swagger -- "OIDC redirect" --> keycloak
+    baiganio -- "OIDC redirect" --> keycloak
+    cosmic -- "OIDC redirect" --> keycloak
+    keycloak -- "ID / access tokens" --> swagger
+    keycloak -- "ID / access tokens" --> baiganio
+    keycloak -- "ID / access tokens" --> cosmic
 
-    client1 -- "OIDC redirect" --> keycloak
-    keycloak -- "ID / access tokens" --> client1
-    client2 -- "OIDC redirect" --> keycloak
-    keycloak -- "ID / access tokens" --> client2
-    clientN -- "OIDC redirect" --> keycloak
-    keycloak -- "ID / access tokens" --> clientN
-
-    api1 -. "issuer + signing-key validation" .-> keycloak
-    api2 -. "issuer + signing-key validation" .-> keycloak
-    apiN -. "issuer + signing-key validation" .-> keycloak
+    api -. "issuer + signing-key + audience validation" .-> keycloak
 ```
 
 ## What this means for security
@@ -80,9 +67,9 @@ since they all validate tokens against the same issuer. That is the reason
 `Fragile / No-Touch Zones` in `AGENTS.md` treats OIDC/issuer trust config and
 credential values as ask-first, not act-freely.
 
-## What's not built yet
+## Current provisioning
 
-Per `README.md`: no realms, clients, or users are configured in any
-environment yet — every scenario currently boots a bare Keycloak with only the
-built-in `master` realm. The diagram above is the target trust shape;
-provisioning real realms/clients per downstream app is planned, not done.
+The committed `baiganio` realm is imported on first boot in Docker, Azure, and
+k3s. It contains three public PKCE browser clients and the `bgapi-api` resource
+client with `admin`, `user`, and `viewer` client roles. User creation and role
+assignment remain operational tasks; realm updates require explicit migrations.

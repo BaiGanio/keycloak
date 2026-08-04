@@ -144,10 +144,10 @@ validate/dry-run step before applying for real — each of `AZURE.md` and
   Kubernetes credential at all — it only publishes an OCI artifact; Flux
   (running inside the cluster) pulls and applies it. This keeps a compromised
   CI run from ever holding cluster credentials.
-- **Realms/clients/users**: not yet provisioned in any environment — every
-  scenario currently boots a bare Keycloak with only the built-in `master`
-  realm. Provisioning real realms/clients for the downstream apps is planned,
-  not yet done — see open issues.
+- **Realms/clients/users**: the committed `baiganio` realm and its clients are
+  now imported on first boot in Docker, Azure, and k3s. User accounts and role
+  assignments remain operational tasks; later realm changes require explicit
+  migrations and must not silently overwrite an existing realm.
 
 ## Code Conventions
 

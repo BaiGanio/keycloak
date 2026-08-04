@@ -246,12 +246,71 @@ Verify the public endpoint:
 
 ```bash
 curl --fail --show-error \
-  https://auth.baiganio.io/realms/master/.well-known/openid-configuration
+  https://auth.baiganio.io/realms/baiganio/.well-known/openid-configuration
 ```
 
 Then open <https://auth.baiganio.io/admin/> and sign in as `admin` with the
 temporary bootstrap password. Create and verify a permanent administrator
 before deleting the temporary account.
+
+The Deployment mounts the committed realm ConfigMap at
+`/opt/keycloak/data/import` and starts Keycloak with `--import-realm`. A fresh
+database receives the `baiganio` realm and its clients; an existing realm is
+skipped on restart. Changes to the realm file require an explicit migration and
+must not be treated as an automatic Flux overwrite.
+
+### Examine the imported configuration on the cluster
+
+First verify the workload, the mounted realm ConfigMap, and the import log:
+
+```bash
+sudo kubectl --namespace keycloak get pods,deployments,configmap realm-import
+
+sudo kubectl --namespace keycloak get configmap realm-import -o json |
+  jq -r '.data["baiganio-realm.json"]' |
+  jq '{realm,clients:[.clients[].clientId],api_roles:[.roles.client."bgapi-api"[].name]}'
+
+sudo kubectl --namespace keycloak logs deployment/keycloak --since=15m |
+  grep -E "Realm 'baiganio' imported|Import finished successfully|started in" || true
+```
+
+Then verify the public issuer and inspect the live clients and roles. Use a
+permanent administrator after the bootstrap account has been retired:
+
+```bash
+curl --fail --silent \
+  https://auth.baiganio.io/realms/baiganio/.well-known/openid-configuration |
+  jq '{issuer,authorization_endpoint,token_endpoint,jwks_uri}'
+
+read -rsp 'Keycloak admin password: ' KEYCLOAK_ADMIN_PASSWORD
+printf '\n'
+access_token="$(curl --fail --silent \
+  --data-urlencode 'client_id=admin-cli' \
+  --data-urlencode 'username=admin' \
+  --data-urlencode "password=$KEYCLOAK_ADMIN_PASSWORD" \
+  --data-urlencode 'grant_type=password' \
+  https://auth.baiganio.io/realms/master/protocol/openid-connect/token |
+  jq -er .access_token)"
+unset KEYCLOAK_ADMIN_PASSWORD
+
+curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  'https://auth.baiganio.io/admin/realms/baiganio/clients?briefRepresentation=true' |
+  jq '[.[].clientId]'
+
+api_client_uuid="$(curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  'https://auth.baiganio.io/admin/realms/baiganio/clients?clientId=bgapi-api' |
+  jq -er '.[0].id')"
+
+curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  "https://auth.baiganio.io/admin/realms/baiganio/clients/$api_client_uuid/roles" |
+  jq '[.[].name]'
+```
+
+Expected clients are `bgapi-api`, `bgapi-swagger`, `baiganio-web`, and
+`cosmic-origins-web`; expected API roles are `admin`, `user`, and `viewer`.
 
 ## First architecture
 
@@ -336,10 +395,9 @@ tunnel is enabled.
 
 ## GitHub-to-Pi deployment model
 
-There is currently no custom Keycloak `Dockerfile` in this repository. Until
-one is added, deployment uses the digest-pinned upstream ARM64-compatible
-Keycloak and PostgreSQL images. A later custom image must be published with an
-immutable tag or digest before the deployment bundle is published.
+The k3s deployment uses the digest-pinned upstream ARM64-compatible Keycloak
+image and mounts the canonical realm file through a generated ConfigMap. The
+Azure-only wrapper image is not used in k3s.
 
 GitHub Actions has no Kubernetes credential and cannot access the Pi's
 Kubernetes API. Flux has no repository checkout and pulls only the published

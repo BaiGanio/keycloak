@@ -287,9 +287,10 @@ can modify resources throughout the `keycloak` resource group.
 2. Run it from the `master` branch.
 3. Follow the **Validate, deploy, and verify** job.
 
-The workflow authenticates through OIDC, confirms that `F1-linux` is a free
-Linux plan in Sweden Central, compiles and validates Bicep, deploys the
-resources, and retries the master-realm discovery endpoint.
+The workflow authenticates through OIDC, publishes the Azure wrapper image
+containing the committed realm to public GHCR, confirms that `F1-linux` is a
+free Linux plan in Sweden Central, compiles and validates Bicep, deploys the
+resources, and retries the `baiganio`-realm discovery endpoint.
 
 The first deployment creates a new Azure SQL schema. A later redeployment is
 declarative and does not delete Keycloak data.
@@ -300,7 +301,7 @@ Check the public discovery endpoint:
 
 ```bash
 curl --fail \
-  https://lk-keycloak.azurewebsites.net/realms/master/.well-known/openid-configuration
+  https://lk-keycloak.azurewebsites.net/realms/baiganio/.well-known/openid-configuration
 ```
 
 Then open <https://lk-keycloak.azurewebsites.net/admin/> and sign in with:
@@ -314,11 +315,12 @@ Create and verify a permanent administrator in the `master` realm, then delete
 the temporary administrator. Changing the bootstrap secret later does not
 change an administrator already stored in Azure SQL.
 
-Create application users and clients in a separate realm. An application's
+The application realm and clients are imported automatically from the wrapper
+image. Create application users in the `baiganio` realm. An application's
 issuer URL is:
 
 ```text
-https://lk-keycloak.azurewebsites.net/realms/<realm-name>
+https://lk-keycloak.azurewebsites.net/realms/baiganio
 ```
 
 ### Start, stop, and inspect the deployment

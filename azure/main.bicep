@@ -10,6 +10,9 @@ param webAppName string = 'lk-keycloak'
 @description('Pinned Keycloak container image version.')
 param keycloakVersion string = '26.7.0'
 
+@description('Azure wrapper image containing the committed realm import file.')
+param keycloakImage string = 'ghcr.io/baiganio/keycloak-azure:${keycloakVersion}'
+
 @description('Azure SQL logical-server administrator login.')
 param sqlAdminLogin string = 'keycloakadmin'
 
@@ -40,7 +43,6 @@ param tags object = {
   managedBy: 'bicep'
 }
 
-var keycloakImage = 'quay.io/keycloak/keycloak:${keycloakVersion}'
 var keycloakUrl = 'https://${webAppName}.azurewebsites.net'
 var sqlServerName = 'lk-keycloak-sql-${uniqueString(subscription().id, resourceGroup().id)}'
 var sqlDatabaseName = 'keycloak'
@@ -113,7 +115,7 @@ resource keycloakApp 'Microsoft.Web/sites@2024-11-01' = {
     serverFarmId: appServicePlan.id
     siteConfig: {
       alwaysOn: false
-      appCommandLine: 'start'
+      appCommandLine: 'start --import-realm'
       appSettings: [
         {
           name: 'WEBSITES_PORT'
@@ -192,6 +194,66 @@ resource keycloakApp 'Microsoft.Web/sites@2024-11-01' = {
           value: 'INFO'
         }
         {
+          name: 'REALM_FRONTEND_URL'
+          value: keycloakUrl
+        }
+        {
+          name: 'SWAGGER_REDIRECT_URI_PUBLIC'
+          value: 'https://api.baiganio.io/swagger/oauth2-redirect.html'
+        }
+        {
+          name: 'SWAGGER_REDIRECT_URI_AZURE'
+          value: '${keycloakUrl}/swagger/oauth2-redirect.html'
+        }
+        {
+          name: 'SWAGGER_REDIRECT_URI_LOCAL'
+          value: 'https://localhost:44364/swagger/oauth2-redirect.html'
+        }
+        {
+          name: 'SWAGGER_ORIGIN_PUBLIC'
+          value: 'https://api.baiganio.io'
+        }
+        {
+          name: 'SWAGGER_ORIGIN_AZURE'
+          value: keycloakUrl
+        }
+        {
+          name: 'SWAGGER_ORIGIN_LOCAL'
+          value: 'https://localhost:44364'
+        }
+        {
+          name: 'BAIGANIO_REDIRECT_URI_PUBLIC'
+          value: 'https://baiganio.github.io/'
+        }
+        {
+          name: 'BAIGANIO_REDIRECT_URI_LOCAL'
+          value: 'http://localhost:4299/'
+        }
+        {
+          name: 'BAIGANIO_ORIGIN_PUBLIC'
+          value: 'https://baiganio.github.io'
+        }
+        {
+          name: 'BAIGANIO_ORIGIN_LOCAL'
+          value: 'http://localhost:4299'
+        }
+        {
+          name: 'COSMIC_ORIGINS_REDIRECT_URI_PUBLIC'
+          value: 'https://baiganio.github.io/cosmic-origins/'
+        }
+        {
+          name: 'COSMIC_ORIGINS_REDIRECT_URI_LOCAL'
+          value: 'http://localhost:4300/'
+        }
+        {
+          name: 'COSMIC_ORIGINS_ORIGIN_PUBLIC'
+          value: 'https://baiganio.github.io'
+        }
+        {
+          name: 'COSMIC_ORIGINS_ORIGIN_LOCAL'
+          value: 'http://localhost:4300'
+        }
+        {
           name: 'JAVA_OPTS_KC_HEAP'
           value: '-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=60'
         }
@@ -214,7 +276,7 @@ resource keycloakApp 'Microsoft.Web/sites@2024-11-01' = {
 
 output webAppName string = keycloakApp.name
 output webAppUrl string = keycloakUrl
-output oidcDiscoveryUrl string = '${keycloakUrl}/realms/master/.well-known/openid-configuration'
+output oidcDiscoveryUrl string = '${keycloakUrl}/realms/baiganio/.well-known/openid-configuration'
 output sqlServerName string = sqlServer.name
 output sqlServerHost string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = keycloakDatabase.name

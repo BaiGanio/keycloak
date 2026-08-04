@@ -29,7 +29,58 @@ Wait for the log message that says Keycloak has started, then open:
 
 - Admin Console: <http://localhost:8080/admin/>
 - OpenID Connect discovery document:
-  <http://localhost:8080/realms/master/.well-known/openid-configuration>
+  <http://localhost:8080/realms/baiganio/.well-known/openid-configuration>
+
+The committed realm is mounted read-only at
+`/opt/keycloak/data/import` and imported with `start-dev --import-realm`.
+The import creates the `baiganio` realm, its four clients, and the `bgapi-api`
+roles on a fresh database. Existing realms are skipped on restart.
+
+### Examine the imported configuration
+
+After `docker compose up -d`, verify the import and inspect the public realm
+metadata:
+
+```bash
+docker compose logs keycloak | grep -E "Realm 'baiganio' imported|Import finished successfully"
+
+curl --fail --silent \
+  http://localhost:8080/realms/baiganio/.well-known/openid-configuration |
+  jq '{issuer,authorization_endpoint,token_endpoint,jwks_uri}'
+```
+
+To inspect clients and API roles through the local Admin API, use the disposable
+bootstrap account:
+
+```bash
+access_token="$(curl --fail --silent \
+  --data 'client_id=admin-cli&username=admin&password=admin&grant_type=password' \
+  http://localhost:8080/realms/master/protocol/openid-connect/token |
+  jq -er .access_token)"
+
+curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  'http://localhost:8080/admin/realms/baiganio/clients?briefRepresentation=true' |
+  jq '[.[].clientId]'
+
+api_client_uuid="$(curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  'http://localhost:8080/admin/realms/baiganio/clients?clientId=bgapi-api' |
+  jq -er '.[0].id')"
+
+curl --fail --silent \
+  -H "Authorization: Bearer $access_token" \
+  "http://localhost:8080/admin/realms/baiganio/clients/$api_client_uuid/roles" |
+  jq '[.[].name]'
+```
+
+For a clean first-boot verification, reset only the disposable local database
+and start again. This permanently removes the local Keycloak data:
+
+```bash
+docker compose down --volumes
+docker compose up -d
+```
 
 The development bootstrap credentials currently defined in
 `docker-compose.yml` are:
@@ -80,8 +131,13 @@ browser:
 
 ```bash
 curl --fail \
-  http://localhost:8080/realms/master/.well-known/openid-configuration
+  http://localhost:8080/realms/baiganio/.well-known/openid-configuration
 ```
+
+Frontends can use this local Keycloak, or they can authenticate against the
+deployed `https://auth.baiganio.io/realms/baiganio` issuer. The deployed realm
+intentionally allows the explicit localhost callback URLs from the committed
+configuration.
 
 The first startup can take longer while Docker downloads both images,
 initializes PostgreSQL, and lets Keycloak create its schema.

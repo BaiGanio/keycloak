@@ -4,19 +4,14 @@ For the **bgapi** team: how the API and its front-ends offload login and token
 issuance to the shared Keycloak instance in this repo, instead of each building
 its own auth.
 
-> **Status: the contract is stable, the concrete values are not yet decided.**
+> **Status: the realm and client contract is implemented.**
 >
-> Everything in *what you must validate*, *what you must never trust*, and the
-> code shapes below is settled and safe to build against today. Every value
-> written as `<placeholder>` is still an open decision — see
-> [Values you are waiting on](#values-you-are-waiting-on). Do not invent them,
-> and do not copy a value out of a screenshot from someone's laptop; they will
-> be published here once the tickets that own them close.
+> Everything in *what you must validate* and *what you must never trust* remains
+> the contract. The concrete realm and client values below are now committed in
+> this repository.
 >
-> No realm, client, or user exists in any environment yet. You can build and
-> unit-test everything here against a local Keycloak (see
-> [Local development](#local-development)), but you cannot yet point at a
-> deployed realm.
+> The `baiganio` realm and its clients are imported in all three environments.
+> Users and role assignments remain operational tasks.
 
 ---
 
@@ -59,29 +54,28 @@ this document.
 
 ---
 
-## Values you are waiting on
+## Implemented values
 
 | What | Placeholder used below | Decided by |
 |---|---|---|
-| Realm name | `<realm>` | [#4 Realm structure](https://github.com/BaiGanio/keycloak/issues/4) |
-| Issuer URL | `https://auth.baiganio.io/realms/<realm>` | [#4](https://github.com/BaiGanio/keycloak/issues/4) |
-| API client id, used as the audience | `<api-client-id>` | [#5 Client topology](https://github.com/BaiGanio/keycloak/issues/5) |
-| Swagger UI client id | `<swagger-client-id>` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
-| One client id per GitHub Pages app | `<spa-client-id>` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
-| Role names, and whether they are realm roles or client roles | `<role>` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
-| Exact redirect URIs and web origins per environment | — | [#9 Non-literal values](https://github.com/BaiGanio/keycloak/issues/9) |
+| Realm name | `baiganio` | [#4 Realm structure](https://github.com/BaiGanio/keycloak/issues/4) |
+| Production issuer URL | `https://auth.baiganio.io/realms/baiganio` | [#4](https://github.com/BaiGanio/keycloak/issues/4) |
+| API client id / audience | `bgapi-api` | [#5 Client topology](https://github.com/BaiGanio/keycloak/issues/5) |
+| Swagger UI client id | `bgapi-swagger` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
+| BaiGanio client id | `baiganio-web` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
+| Cosmic Origins client id | `cosmic-origins-web` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
+| API client roles | `admin`, `user`, `viewer` | [#5](https://github.com/BaiGanio/keycloak/issues/5) |
 
 Issuer host per environment:
 
 | Environment | Keycloak base URL |
 |---|---|
-| Local Docker (`docker compose up`) | `http://localhost:8080` |
-| Azure | `https://<app-name>.azurewebsites.net` |
-| k3s (production target) | `https://auth.baiganio.io` |
+| Local Docker (`docker compose up`) | `http://localhost:8080/realms/baiganio` |
+| Azure | `https://lk-keycloak.azurewebsites.net/realms/baiganio` |
+| k3s (production target) | `https://auth.baiganio.io/realms/baiganio` |
 
-The realm name may or may not differ between these — that is exactly what #4
-decides. **Treat the whole issuer URL as one configured string**, not as a host
-plus a hardcoded realm, so that decision cannot force a code change on you.
+The realm name is `baiganio` everywhere. **Treat the whole issuer URL as one
+configured string**, because the host still differs by environment.
 
 ---
 
@@ -110,8 +104,8 @@ dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
 // appsettings.json — values differ per environment, so keep them in config
 {
   "Keycloak": {
-    "Issuer": "https://auth.baiganio.io/realms/<realm>",
-    "Audience": "<api-client-id>"
+    "Issuer": "https://auth.baiganio.io/realms/baiganio",
+    "Audience": "bgapi-api"
   }
 }
 ```
@@ -161,8 +155,8 @@ the pain stop, you have just accepted tokens minted for a completely different
 application.
 
 The fix belongs on the Keycloak side, not yours: the client needs an **audience
-mapper** that adds `<api-client-id>` to `aud`. That mapper is part of what the
-committed realm file must contain — raise it on
+mapper** that adds `bgapi-api` to `aud`. That mapper is part of the committed
+realm file and is already configured.
 [#5](https://github.com/BaiGanio/keycloak/issues/5) if the realm lands without
 it. Verify by decoding a real token and confirming `aud` before you ship.
 
@@ -175,7 +169,7 @@ Keycloak puts roles inside nested JSON objects:
 ```jsonc
 {
   "realm_access":    { "roles": ["offline_access", "<role>"] },
-  "resource_access": { "<api-client-id>": { "roles": ["<role>"] } }
+  "resource_access": { "bgapi-api": { "roles": ["admin"] } }
 }
 ```
 
@@ -348,7 +342,7 @@ builder.Services.AddSwaggerGen(c =>
 
 app.UseSwaggerUI(c =>
 {
-    c.OAuthClientId("<swagger-client-id>");
+    c.OAuthClientId("bgapi-swagger");
     c.OAuthUsePkce();                       // required — no secret in the browser
     c.OAuthScopes("openid", "profile", "email");
 });
@@ -358,7 +352,9 @@ The redirect URI Keycloak must allow for this client is Swagger's own callback
 page:
 
 ```
-https://<your-api-host>/swagger/oauth2-redirect.html
+https://api.baiganio.io/swagger/oauth2-redirect.html
+https://bgapi.azurewebsites.net/swagger/oauth2-redirect.html
+https://localhost:44364/swagger/oauth2-redirect.html
 ```
 
 `[AllowAnonymous]` endpoints stay callable from Swagger without logging in —
@@ -388,6 +384,13 @@ What Keycloak needs configured per app:
 - **Web origins** — the exact origin, so the browser's CORS preflight to
   Keycloak's token endpoint succeeds. A missing web origin produces a CORS
   error that looks like a network fault, not an auth fault.
+
+The committed clients are `baiganio-web` for
+`https://baiganio.github.io/` and `cosmic-origins-web` for
+`https://baiganio.github.io/cosmic-origins/`. Their local callbacks are
+`http://localhost:4299/` and `http://localhost:4300/`. The deployed realm
+intentionally accepts these explicit localhost callbacks so local frontends can
+use the deployed issuer.
 
 And on your side, the API needs a CORS policy naming those same origins:
 
@@ -424,15 +427,14 @@ Console credentials are the bootstrap pair in `docker-compose.yml` — `admin` /
 `admin`, local and disposable, never a pattern to copy anywhere else. See
 [`DOCKER.md`](DOCKER.md) for the full guide.
 
-Until the committed realm exists, create a throwaway realm and clients by hand
-in the Admin Console to develop against. **Treat that as scaffolding, not
-truth** — the real realm will come from a file in this repo, and anything you
-configured by hand locally will be replaced by it.
+The committed realm is already available locally after `docker compose up`.
+Use the Admin Console for users and role assignments, not for editing the
+versioned realm definition.
 
 Confirm your issuer configuration resolves before debugging anything else:
 
 ```bash
-curl -s http://localhost:8080/realms/<realm>/.well-known/openid-configuration | jq .
+curl -s http://localhost:8080/realms/baiganio/.well-known/openid-configuration | jq .
 ```
 
 If that returns JSON with an `issuer` matching what your API is configured
@@ -452,7 +454,7 @@ cut -d. -f2 <<<"$TOKEN" | base64 -d 2>/dev/null | jq .
 - [ ] Discovery document resolves from the API host, over HTTPS in deployed environments.
 - [ ] A request with **no** token to a protected endpoint returns 401.
 - [ ] A request with an **expired** token returns 401.
-- [ ] A request with a token whose `aud` lacks `<api-client-id>` returns 401.
+- [ ] A request with a token whose `aud` lacks `bgapi-api` returns 401.
 - [ ] A valid token reaches a protected endpoint successfully.
 - [ ] An `[AllowAnonymous]` endpoint still works with no token at all.
 - [ ] A role-gated endpoint returns 403 — not 401 — for an authenticated user lacking the role.

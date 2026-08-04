@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 concurrency:
   group: keycloak-azure-deployment
@@ -23,6 +24,30 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Publish Azure Keycloak image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          AZURE_KEYCLOAK_IMAGE: ghcr.io/baiganio/keycloak-azure:${{ github.sha }}
+          AZURE_KEYCLOAK_VERSION_IMAGE: ghcr.io/baiganio/keycloak-azure:26.7.0
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+          docker build \
+            --file azure/Dockerfile \
+            --tag "$AZURE_KEYCLOAK_IMAGE" \
+            --tag "$AZURE_KEYCLOAK_VERSION_IMAGE" \
+            .
+          docker push "$AZURE_KEYCLOAK_IMAGE"
+          docker push "$AZURE_KEYCLOAK_VERSION_IMAGE"
+          gh api \
+            --method PATCH \
+            user/packages/container/keycloak-azure \
+            --field visibility=public \
+            > /dev/null
 
       - name: Sign in to Azure with GitHub OIDC
         uses: azure/login@v2
@@ -82,10 +107,12 @@ jobs:
         env:
           AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
           KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}
+          AZURE_KEYCLOAK_IMAGE: ghcr.io/baiganio/keycloak-azure:${{ github.sha }}
         run: |
           az deployment group validate \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --parameters main.bicepparam
+            --parameters main.bicepparam \
+              keycloakImage="$AZURE_KEYCLOAK_IMAGE"
 
       - name: Deploy infrastructure
         id: deploy
@@ -93,13 +120,15 @@ jobs:
         env:
           AZURE_SQL_ADMIN_PASSWORD: ${{ secrets.AZURE_SQL_ADMIN_PASSWORD }}
           KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD }}
+          AZURE_KEYCLOAK_IMAGE: ghcr.io/baiganio/keycloak-azure:${{ github.sha }}
         run: |
           deployment_name="keycloak-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           az deployment group create \
             --name "$deployment_name" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --parameters main.bicepparam
+            --parameters main.bicepparam \
+              keycloakImage="$AZURE_KEYCLOAK_IMAGE"
 
           web_app_url="$(az deployment group show \
             --name "$deployment_name" \

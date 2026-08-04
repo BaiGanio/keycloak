@@ -51,6 +51,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - start
+            - --import-realm
           env:
             - name: KC_DB
               value: postgres
@@ -90,6 +91,40 @@ spec:
               value: INFO
             - name: JAVA_OPTS_KC_HEAP
               value: -XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=70
+            - name: REALM_FRONTEND_URL
+              value: https://auth.baiganio.io
+            - name: SWAGGER_REDIRECT_URI_PUBLIC
+              value: https://api.baiganio.io/swagger/oauth2-redirect.html
+            - name: SWAGGER_REDIRECT_URI_AZURE
+              value: https://bgapi.azurewebsites.net/swagger/oauth2-redirect.html
+            - name: SWAGGER_REDIRECT_URI_LOCAL
+              value: https://localhost:44364/swagger/oauth2-redirect.html
+            - name: SWAGGER_ORIGIN_PUBLIC
+              value: https://api.baiganio.io
+            - name: SWAGGER_ORIGIN_AZURE
+              value: https://bgapi.azurewebsites.net
+            - name: SWAGGER_ORIGIN_LOCAL
+              value: https://localhost:44364
+            - name: BAIGANIO_REDIRECT_URI_PUBLIC
+              value: https://baiganio.github.io/
+            - name: BAIGANIO_REDIRECT_URI_LOCAL
+              value: http://localhost:4299/
+            - name: BAIGANIO_ORIGIN_PUBLIC
+              value: https://baiganio.github.io
+            - name: BAIGANIO_ORIGIN_LOCAL
+              value: http://localhost:4299
+            - name: COSMIC_ORIGINS_REDIRECT_URI_PUBLIC
+              value: https://baiganio.github.io/cosmic-origins/
+            - name: COSMIC_ORIGINS_REDIRECT_URI_LOCAL
+              value: http://localhost:4300/
+            - name: COSMIC_ORIGINS_ORIGIN_PUBLIC
+              value: https://baiganio.github.io
+            - name: COSMIC_ORIGINS_ORIGIN_LOCAL
+              value: http://localhost:4300
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
           ports:
             - name: http
               containerPort: 8080
@@ -129,3 +164,7 @@ spec:
               drop:
                 - ALL
             runAsNonRoot: true
+      volumes:
+        - name: realm-import
+          configMap:
+            name: realm-import

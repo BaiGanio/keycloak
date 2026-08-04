@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.45.15.27210",
-      "templateHash": "6633271975832705368"
+      "version": "0.46.1.21595",
+      "templateHash": "1160014814029992820"
     }
   },
   "parameters": {
@@ -35,6 +35,13 @@
       "defaultValue": "26.7.0",
       "metadata": {
         "description": "Pinned Keycloak container image version."
+      }
+    },
+    "keycloakImage": {
+      "type": "string",
+      "defaultValue": "[format('ghcr.io/baiganio/keycloak-azure:{0}', parameters('keycloakVersion'))]",
+      "metadata": {
+        "description": "Azure wrapper image containing the committed realm import file."
       }
     },
     "sqlAdminLogin": {
@@ -93,7 +100,6 @@
     }
   },
   "variables": {
-    "keycloakImage": "[format('quay.io/keycloak/keycloak:{0}', parameters('keycloakVersion'))]",
     "keycloakUrl": "[format('https://{0}.azurewebsites.net', parameters('webAppName'))]",
     "sqlServerName": "[format('lk-keycloak-sql-{0}', uniqueString(subscription().id, resourceGroup().id))]",
     "sqlDatabaseName": "keycloak",
@@ -172,7 +178,7 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
         "siteConfig": {
           "alwaysOn": false,
-          "appCommandLine": "start",
+          "appCommandLine": "start --import-realm",
           "appSettings": [
             {
               "name": "WEBSITES_PORT",
@@ -251,6 +257,66 @@
               "value": "INFO"
             },
             {
+              "name": "REALM_FRONTEND_URL",
+              "value": "[variables('keycloakUrl')]"
+            },
+            {
+              "name": "SWAGGER_REDIRECT_URI_PUBLIC",
+              "value": "https://api.baiganio.io/swagger/oauth2-redirect.html"
+            },
+            {
+              "name": "SWAGGER_REDIRECT_URI_AZURE",
+              "value": "[format('{0}/swagger/oauth2-redirect.html', variables('keycloakUrl'))]"
+            },
+            {
+              "name": "SWAGGER_REDIRECT_URI_LOCAL",
+              "value": "https://localhost:44364/swagger/oauth2-redirect.html"
+            },
+            {
+              "name": "SWAGGER_ORIGIN_PUBLIC",
+              "value": "https://api.baiganio.io"
+            },
+            {
+              "name": "SWAGGER_ORIGIN_AZURE",
+              "value": "[variables('keycloakUrl')]"
+            },
+            {
+              "name": "SWAGGER_ORIGIN_LOCAL",
+              "value": "https://localhost:44364"
+            },
+            {
+              "name": "BAIGANIO_REDIRECT_URI_PUBLIC",
+              "value": "https://baiganio.github.io/"
+            },
+            {
+              "name": "BAIGANIO_REDIRECT_URI_LOCAL",
+              "value": "http://localhost:4299/"
+            },
+            {
+              "name": "BAIGANIO_ORIGIN_PUBLIC",
+              "value": "https://baiganio.github.io"
+            },
+            {
+              "name": "BAIGANIO_ORIGIN_LOCAL",
+              "value": "http://localhost:4299"
+            },
+            {
+              "name": "COSMIC_ORIGINS_REDIRECT_URI_PUBLIC",
+              "value": "https://baiganio.github.io/cosmic-origins/"
+            },
+            {
+              "name": "COSMIC_ORIGINS_REDIRECT_URI_LOCAL",
+              "value": "http://localhost:4300/"
+            },
+            {
+              "name": "COSMIC_ORIGINS_ORIGIN_PUBLIC",
+              "value": "https://baiganio.github.io"
+            },
+            {
+              "name": "COSMIC_ORIGINS_ORIGIN_LOCAL",
+              "value": "http://localhost:4300"
+            },
+            {
               "name": "JAVA_OPTS_KC_HEAP",
               "value": "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=60"
             }
@@ -258,7 +324,7 @@
           "ftpsState": "Disabled",
           "http20Enabled": true,
           "httpLoggingEnabled": true,
-          "linuxFxVersion": "[format('DOCKER|{0}', variables('keycloakImage'))]",
+          "linuxFxVersion": "[format('DOCKER|{0}', parameters('keycloakImage'))]",
           "minTlsVersion": "1.2",
           "remoteDebuggingEnabled": false,
           "scmMinTlsVersion": "1.2",
@@ -283,7 +349,7 @@
     },
     "oidcDiscoveryUrl": {
       "type": "string",
-      "value": "[format('{0}/realms/master/.well-known/openid-configuration', variables('keycloakUrl'))]"
+      "value": "[format('{0}/realms/baiganio/.well-known/openid-configuration', variables('keycloakUrl'))]"
     },
     "sqlServerName": {
       "type": "string",

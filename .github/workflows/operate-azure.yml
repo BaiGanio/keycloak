@@ -62,7 +62,7 @@ jobs:
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEB_APP_NAME"
 
-          oidc_discovery_url="https://${AZURE_WEB_APP_NAME}.azurewebsites.net/realms/master/.well-known/openid-configuration"
+          oidc_discovery_url="https://${AZURE_WEB_APP_NAME}.azurewebsites.net/realms/baiganio/.well-known/openid-configuration"
           for attempt in $(seq 1 45); do
             if curl --fail --silent --show-error "$oidc_discovery_url" > /dev/null; then
               echo "Keycloak is ready at $oidc_discovery_url"

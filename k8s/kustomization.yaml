@@ -5,3 +5,11 @@ resources:
   - postgres.yaml
   - keycloak.yaml
   - ingress.yaml
+
+configMapGenerator:
+  - name: realm-import
+    files:
+      - realm/baiganio-realm.json
+
+generatorOptions:
+  disableNameSuffixHash: true
