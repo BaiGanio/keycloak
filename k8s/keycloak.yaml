@@ -83,6 +83,11 @@ spec:
                 secretKeyRef:
                   name: keycloak-credentials
                   key: bootstrap-admin-password
+            - name: BGAPI_SWAGGER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-credentials
+                  key: bgapi-swagger-password
             - name: KC_HEALTH_ENABLED
               value: "true"
             - name: KC_METRICS_ENABLED

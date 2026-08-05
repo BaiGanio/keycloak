@@ -90,6 +90,17 @@ username: admin
 password: admin
 ```
 
+The fresh `baiganio` realm also creates this local-only Swagger demo user with
+the `viewer` role on `bgapi-api`:
+
+```text
+username: swagger@baiganio.io
+password: SwaggerTest123!
+```
+
+This password exists only for disposable local development. The k3s deployment
+uses its own password from the Kubernetes Secret and does not commit it.
+
 ### Temporary bootstrap administrator
 
 After logging in as `admin`, Keycloak displays this message:

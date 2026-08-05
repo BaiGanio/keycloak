@@ -141,14 +141,17 @@ read -rsp 'PostgreSQL password: ' KEYCLOAK_POSTGRES_PASSWORD
 printf '\n'
 read -rsp 'Temporary Keycloak admin password: ' KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
 printf '\n'
+read -rsp 'BGAPI Swagger user password: ' KEYCLOAK_BGAPI_SWAGGER_PASSWORD
+printf '\n'
 
-printf 'postgres-password=%s\nbootstrap-admin-password=%s\n' \
+printf 'postgres-password=%s\nbootstrap-admin-password=%s\nbgapi-swagger-password=%s\n' \
   "$KEYCLOAK_POSTGRES_PASSWORD" \
-  "$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD" |
+  "$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD" \
+  "$KEYCLOAK_BGAPI_SWAGGER_PASSWORD" |
   sudo kubectl --namespace keycloak create secret generic keycloak-credentials \
     --from-env-file=/dev/stdin
 
-unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
+unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD KEYCLOAK_BGAPI_SWAGGER_PASSWORD
 ```
 
 Apply only the Flux source configuration directly from GitHub:
@@ -255,9 +258,52 @@ before deleting the temporary account.
 
 The Deployment mounts the committed realm ConfigMap at
 `/opt/keycloak/data/import` and starts Keycloak with `--import-realm`. A fresh
-database receives the `baiganio` realm and its clients; an existing realm is
-skipped on restart. Changes to the realm file require an explicit migration and
-must not be treated as an automatic Flux overwrite.
+database receives the `baiganio` realm, its clients, and the `swagger@baiganio.io`
+Swagger user. That user has only the `viewer` role on `bgapi-api`; its password
+is read from the non-committed `bgapi-swagger-password` key in
+`keycloak-credentials`.
+An existing realm is skipped on restart. Changes to the realm file require an
+explicit migration and must not be treated as an automatic Flux overwrite.
+
+### Development-only clean reset
+
+For an early development deployment where no Keycloak data needs to be kept,
+delete the namespace and recreate the bootstrap secret before Flux reconciles
+the manifests. This deletes the Keycloak PostgreSQL PVC and all realms, users,
+sessions, and credentials stored in it. Confirm that the cluster StorageClass
+does not retain released volumes if a complete data reset is required.
+
+```bash
+sudo kubectl delete namespace keycloak
+sudo kubectl wait --for=delete namespace/keycloak --timeout=5m
+
+sudo kubectl create namespace keycloak
+
+read -rsp 'PostgreSQL password: ' KEYCLOAK_POSTGRES_PASSWORD
+printf '\n'
+read -rsp 'Temporary Keycloak admin password: ' KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
+printf '\n'
+read -rsp 'BGAPI Swagger user password: ' KEYCLOAK_BGAPI_SWAGGER_PASSWORD
+printf '\n'
+
+printf 'postgres-password=%s\nbootstrap-admin-password=%s\nbgapi-swagger-password=%s\n' \
+  "$KEYCLOAK_POSTGRES_PASSWORD" \
+  "$KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD" \
+  "$KEYCLOAK_BGAPI_SWAGGER_PASSWORD" |
+  sudo kubectl --namespace keycloak create secret generic keycloak-credentials \
+    --from-env-file=/dev/stdin
+
+unset KEYCLOAK_POSTGRES_PASSWORD KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD KEYCLOAK_BGAPI_SWAGGER_PASSWORD
+
+sudo kubectl --namespace flux-system annotate ocirepository/keycloak \
+  reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+
+sudo kubectl --namespace flux-system annotate kustomization/keycloak \
+  reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+```
+
+Wait for Flux to recreate the workloads, then verify that the realm import
+completed before using the demo account.
 
 ### Examine the imported configuration on the cluster
 

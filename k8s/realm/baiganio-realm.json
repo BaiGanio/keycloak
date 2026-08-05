@@ -115,6 +115,24 @@
       "attributes": { "pkce.code.challenge.method": "S256" }
     }
   ],
+  "users": [
+    {
+      "username": "swagger@baiganio.io",
+      "email": "swagger@baiganio.io",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${BGAPI_SWAGGER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "clientRoles": {
+        "bgapi-api": ["viewer"]
+      }
+    }
+  ],
   "roles": {
     "client": {
       "bgapi-api": [
