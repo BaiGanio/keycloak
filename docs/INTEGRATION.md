@@ -240,8 +240,33 @@ builder.Services.AddSingleton<IClaimsTransformation, KeycloakRolesTransformation
 ```
 
 Whether you should be reading realm roles, client roles, or both is
-[#5](https://github.com/BaiGanio/keycloak/issues/5)'s call — the code above
-reads both so it keeps working either way.
+not a deployment decision: the implemented roles are client roles under
+`bgapi-api`, and they appear in `resource_access.bgapi-api.roles`.
+
+## What bgapi should do next
+
+The Keycloak side is ready. The bgapi team should now:
+
+1. Add the `Keycloak:Issuer` and `Keycloak:Audience` settings to each API
+   environment, using the issuer table above and audience `bgapi-api`.
+2. Install and configure `Microsoft.AspNetCore.Authentication.JwtBearer` with
+   issuer, signature, audience, and lifetime validation enabled.
+3. Register the claims transformation shown above so client roles become
+   normal ASP.NET role claims.
+4. Set a fallback authorization policy so new API endpoints are protected by
+   default; mark only deliberate public endpoints with `[AllowAnonymous]`.
+5. Configure Swagger with client ID `bgapi-swagger`, PKCE, and the exact
+   callback for the host being used.
+6. Configure API CORS for the actual frontend origins:
+   `https://baiganio.github.io`, `https://api.baiganio.io`,
+   `https://bgapi.azurewebsites.net`, `http://localhost:4299`,
+   `http://localhost:4300`, and `https://localhost:44364` where applicable.
+7. Verify one public endpoint, one authenticated endpoint, and one role-gated
+   endpoint with a real token before enabling production traffic.
+
+Do not create another Keycloak realm or client manually unless the change is
+first reflected in the committed realm definition. Do not add a client secret
+to Swagger or either GitHub Pages application.
 
 ### Mixed public and protected controllers
 
@@ -273,7 +298,7 @@ public class CatalogController : ControllerBase
     public IActionResult GetMine() => Ok(/* ... */);   // any authenticated user
 
     [HttpDelete("{id}")]
-    [Authorize(Roles = "<role>")]           // role-gated
+    [Authorize(Roles = "admin")]            // role-gated
     public IActionResult Delete(int id) => NoContent();
 }
 ```
@@ -396,7 +421,13 @@ And on your side, the API needs a CORS policy naming those same origins:
 
 ```csharp
 builder.Services.AddCors(o => o.AddPolicy("baiganio-spas", p => p
-    .WithOrigins("https://baiganio.github.io", "http://localhost:5173")
+    .WithOrigins(
+        "https://baiganio.github.io",
+        "https://api.baiganio.io",
+        "https://bgapi.azurewebsites.net",
+        "http://localhost:4299",
+        "http://localhost:4300",
+        "https://localhost:44364")
     .AllowAnyHeader()
     .WithMethods("GET", "POST", "PUT", "DELETE")));
 
@@ -487,8 +518,9 @@ cut -d. -f2 <<<"$TOKEN" | base64 -d 2>/dev/null | jq .
 | Running Keycloak locally | [`DOCKER.md`](DOCKER.md) |
 | Azure deployment | [`AZURE.md`](AZURE.md) |
 | k3s / Raspberry Pi 5 deployment | [`K3SPI5.md`](K3SPI5.md) |
-| The effort that will fill in the placeholders above | [Issue #2 — realm-as-code map](https://github.com/BaiGanio/keycloak/issues/2) |
+| Realm-as-code decisions and implementation | [Issue #2 — realm-as-code map](https://github.com/BaiGanio/keycloak/issues/2) |
+| Azure deployment verification | [Issue #11](https://github.com/BaiGanio/keycloak/issues/11) |
 
-Questions about a placeholder value belong as a comment on the ticket that owns
-it, so the answer lands where the decision is recorded rather than in a chat
-thread.
+Questions about a realm or client change belong in the repository issue or pull
+request so the answer lands with the security-sensitive configuration rather
+than in a chat thread.
