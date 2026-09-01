@@ -4,6 +4,17 @@
   "displayName": "BaiGanio",
   "registrationAllowed": false,
   "rememberMe": true,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(8) and notUsername and notEmail and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "eventsEnabled": true,
+  "eventsExpiration": 15552000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
   "clients": [
     {
       "clientId": "bgapi-api",

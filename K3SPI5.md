@@ -358,6 +358,62 @@ curl --fail --silent \
 Expected clients are `bgapi-api`, `bgapi-swagger`, `baiganio-web`, and
 `cosmic-origins-web`; expected API roles are `admin`, `user`, and `viewer`.
 
+## Apply login-security settings to an already-existing realm
+
+`k8s/realm/baiganio-realm.json` now carries three login-security settings:
+brute-force lockout, a password rule, and event logging. Realm import only
+runs the first time a realm is built — Keycloak skips the file on every boot
+after that, because the `baiganio` realm already exists in the Pi's
+PostgreSQL database. Pushing this file to GitHub, or restarting the pod,
+changes nothing on its own. Pick one of the two paths below.
+
+### Path A — no real users on the Pi yet
+
+If the Pi's `baiganio` realm holds only test data, wipe it and let Flux
+rebuild it from the updated file. This is the same procedure as
+[Development-only clean reset](#development-only-clean-reset) above — it
+deletes all users, sessions, and credentials in that realm. Do this only
+after confirming with whoever owns any accounts on the Pi.
+
+### Path B — real users are already on the Pi
+
+Keep everyone's accounts and sessions. Push the three settings onto the live
+realm with Keycloak's own admin tool, `kcadm.sh`, running inside the pod:
+
+```bash
+sudo kubectl --namespace keycloak exec -it deployment/keycloak -- \
+  /opt/keycloak/bin/kcadm.sh config credentials \
+    --server http://localhost:8080 --realm master --user admin
+# enter the Keycloak admin password when prompted
+
+sudo kubectl --namespace keycloak exec -it deployment/keycloak -- \
+  /opt/keycloak/bin/kcadm.sh update realms/baiganio \
+    -s bruteForceProtected=true \
+    -s permanentLockout=false \
+    -s failureFactor=5 \
+    -s waitIncrementSeconds=60 \
+    -s maxFailureWaitSeconds=900 \
+    -s maxDeltaTimeSeconds=43200 \
+    -s passwordPolicy="length(8) and notUsername and notEmail and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)" \
+    -s eventsEnabled=true \
+    -s eventsExpiration=15552000 \
+    -s adminEventsEnabled=true \
+    -s adminEventsDetailsEnabled=true
+```
+
+Then confirm the live realm matches the file:
+
+```bash
+sudo kubectl --namespace keycloak exec -it deployment/keycloak -- \
+  /opt/keycloak/bin/kcadm.sh get realms/baiganio \
+    --fields bruteForceProtected,failureFactor,permanentLockout,passwordPolicy,eventsEnabled,adminEventsEnabled
+```
+
+This change lives only in the Pi's database. If the realm is ever wiped and
+reimported later (Path A, or a full disaster restore), it comes back
+automatically, because the file already carries these settings — nothing
+further to do at that point.
+
 ## First architecture
 
 The first deployed architecture is:
