@@ -54,6 +54,7 @@ short on purpose — pick your scenario above and open its guide.
 | `.github/workflows/operate-azure.yml` | Manual GitHub Actions workflow: starts, stops, or reports Azure resource state |
 | `AZURE.md` | Azure deployment and operations instructions |
 | `k8s/` | Runs Keycloak with PostgreSQL on the Pi 5 k3s cluster |
+| `k8s/backup.yaml` | Nightly `pg_dump` CronJob and the volume its dumps are written to |
 | `k8s/flux/keycloak-sync.yaml` | One-time Pi bootstrap: makes Flux pull and apply the published bundle |
 | `.github/workflows/publish-k3s.yml` | Publishes deployment bundles to GHCR and notifies Flux |
 | `K3SPI5.md` | k3s/Raspberry Pi deployment instructions, including why Flux is used |

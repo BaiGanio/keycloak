@@ -463,6 +463,170 @@ values are merely base64-encoded.
 SOPS, Sealed Secrets, External Secrets, and a PostgreSQL operator are reasonable
 later options for automating secret rotation and database operations.
 
+## Backup and restore
+
+`k8s/backup.yaml` adds a nightly logical backup of the Keycloak database. A
+`CronJob` runs `pg_dump` at 02:15 UTC, writes a compressed custom-format dump
+to the `postgres-backup` PersistentVolumeClaim, reads the dump back with
+`pg_restore --list` to prove it is complete, then deletes dumps older than 14
+days. The job reuses the pinned PostgreSQL image and the existing
+`keycloak-credentials` Secret, so it adds no new credential.
+
+### What this protects, and what it does not
+
+The `postgres-backup` claim uses the same `local-path` storage class as the
+database. Both therefore live on the same node disk. The dumps protect against
+a corrupted database, a bad realm migration, and an accidental deletion. They
+do not protect against loss of the SSD or the Pi. Copy the dumps off the node,
+as described below, before treating this as disaster recovery. The dumps are
+not encrypted at rest.
+
+### Inspect the schedule and the last run
+
+```bash
+kubectl --namespace keycloak get cronjob postgres-backup
+kubectl --namespace keycloak get jobs \
+  --selector app.kubernetes.io/name=postgres-backup
+kubectl --namespace keycloak logs \
+  --selector app.kubernetes.io/name=postgres-backup \
+  --tail=20
+```
+
+The log of a successful run ends with `wrote and verified /backup/keycloak-<timestamp>.dump`
+followed by a listing of the retained dumps.
+
+### Run a backup immediately
+
+```bash
+kubectl --namespace keycloak create job \
+  --from=cronjob/postgres-backup \
+  "postgres-backup-manual-$(date -u +%Y%m%d%H%M%S)"
+```
+
+### Copy the dumps off the Pi
+
+The `local-path` provisioner stores the claim in a directory under
+`/var/lib/rancher/k3s/storage/` on the node. Find that directory, then stream
+it to another machine:
+
+```bash
+ssh <pi-host> 'sudo ls -d /var/lib/rancher/k3s/storage/*postgres-backup*'
+
+mkdir -p ~/keycloak-backups
+ssh <pi-host> \
+  'sudo tar --directory /var/lib/rancher/k3s/storage/<claim-directory> --create --file - .' \
+  | tar --directory ~/keycloak-backups --extract --file -
+```
+
+Run this on a schedule from the receiving machine. The Pi does not need any
+outbound credential for it.
+
+### Restore a dump
+
+Keycloak must not be running during a restore. It caches realm state and
+writes sessions continuously.
+
+1. Stop Keycloak and wait for its pod to disappear.
+
+   ```bash
+   kubectl --namespace keycloak scale deployment keycloak --replicas=0
+   kubectl --namespace keycloak wait --for=delete pod \
+     --selector app.kubernetes.io/name=keycloak \
+     --timeout=180s
+   ```
+
+2. Start a helper pod that mounts the backup claim. The claim is
+   `ReadWriteOnce`, so no backup job may be running at the same time.
+
+   ```bash
+   kubectl --namespace keycloak apply --filename - <<'EOF'
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: postgres-restore
+     labels:
+       app.kubernetes.io/name: postgres-restore
+       app.kubernetes.io/part-of: keycloak
+   spec:
+     restartPolicy: Never
+     securityContext:
+       fsGroup: 70
+       seccompProfile:
+         type: RuntimeDefault
+     containers:
+       - name: restore
+         image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+         command: ["sleep", "3600"]
+         env:
+           - name: PGHOST
+             value: postgres
+           - name: PGDATABASE
+             value: keycloak
+           - name: PGUSER
+             value: keycloak
+           - name: PGPASSWORD
+             valueFrom:
+               secretKeyRef:
+                 name: keycloak-credentials
+                 key: postgres-password
+         volumeMounts:
+           - name: backup
+             mountPath: /backup
+         securityContext:
+           allowPrivilegeEscalation: false
+           capabilities:
+             drop:
+               - ALL
+           runAsGroup: 70
+           runAsNonRoot: true
+           runAsUser: 70
+     volumes:
+       - name: backup
+         persistentVolumeClaim:
+           claimName: postgres-backup
+   EOF
+
+   kubectl --namespace keycloak wait --for=condition=Ready pod/postgres-restore --timeout=120s
+   ```
+
+3. Choose a dump and restore it.
+
+   ```bash
+   kubectl --namespace keycloak exec postgres-restore -- \
+     sh -ec 'ls -1t /backup/keycloak-*.dump'
+
+   kubectl --namespace keycloak exec postgres-restore -- \
+     sh -ec 'pg_restore --clean --if-exists --no-owner --no-privileges \
+       --dbname="$PGDATABASE" /backup/keycloak-<timestamp>.dump'
+   ```
+
+   `--clean --if-exists` drops the existing objects first, so the restore
+   replaces the current database rather than merging into it.
+
+4. Remove the helper pod and start Keycloak.
+
+   ```bash
+   kubectl --namespace keycloak delete pod postgres-restore
+   kubectl --namespace keycloak scale deployment keycloak --replicas=1
+   kubectl --namespace keycloak rollout status deployment keycloak --timeout=600s
+   ```
+
+   If the dump came from an older Keycloak version, the newer image runs its
+   own Liquibase migration during this startup. Allow the full timeout.
+
+5. Confirm the realm answers.
+
+   ```bash
+   curl --fail --silent --show-error \
+     https://auth.baiganio.io/realms/baiganio/.well-known/openid-configuration \
+     > /dev/null && echo "discovery OK"
+   ```
+
+### Rehearse the restore
+
+Do the full restore once on the real Pi before you depend on it. A backup that
+has never been restored is not a verified backup.
+
 ## Relationship to the existing SD-card backup guide
 
 The separate
@@ -476,19 +640,23 @@ user, `/mnt/k3s-data` path, and application workload names. This Keycloak
 deployment may instead use a StatefulSet, a different namespace, a dynamically
 provisioned PVC, and different credentials.
 
-For the first iteration, the guide is treated as an existing cluster-level
-safety mechanism to inspect, not as a verified Keycloak restore procedure.
-Later work will adapt the logical `pg_dump` step to the actual Keycloak
-PostgreSQL resource and test a restore. Copying live PostgreSQL data files by
-itself is not a substitute for a database-consistent backup.
+The logical `pg_dump` step is now adapted to this deployment and runs on its
+own schedule; see `Backup and restore` above. The SD-card guide remains useful
+for the cluster-level material that this Keycloak backup does not cover: k3s
+configuration and the persistent-volume data of other workloads. Copying live
+PostgreSQL data files by itself is not a substitute for a database-consistent
+dump.
 
 ## Deferred work
 
 The following are intentionally documented but not required to get the first
 Pi deployment running:
 
-- scheduled and encrypted PostgreSQL-aware backups;
-- a tested PostgreSQL restore procedure;
+- encryption at rest for the PostgreSQL dumps;
+- an automatic off-node copy of the dumps (the pull is documented under
+  `Backup and restore`, but nothing schedules it yet);
+- a restore rehearsed on the real Pi (the procedure is documented, not yet
+  executed);
 - multi-node replicated storage or highly available PostgreSQL;
 - automated discovery, Admin Console, login, and token smoke tests;
 - rehearsed Keycloak and PostgreSQL upgrade and rollback procedures;

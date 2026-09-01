@@ -119,6 +119,7 @@ validate/dry-run step before applying for real — each of `AZURE.md` and
 |----------|-----|
 | `azure/main.bicep` ↔ `azure/azuredeploy.json` | ARM JSON is compiled from bicep; hand-editing the JSON causes silent drift from the real source. |
 | `k8s/keycloak.yaml` ↔ k8s Secret `keycloak-credentials` | Env vars pull specific secret keys by name; a rename on either side breaks startup silently. |
+| `k8s/backup.yaml` ↔ k8s Secret `keycloak-credentials` | The backup CronJob reads the same `postgres-password` key; a rename stops the nightly dump silently, because nothing else reports a missing backup. |
 | `k8s/ingress.yaml` ↔ `k8s/keycloak.yaml` (`KC_HOSTNAME`, `KC_PROXY_HEADERS`) | Reverse-proxy headers and Keycloak's hostname/proxy config must agree or OIDC redirects break. |
 | `.github/workflows/publish-k3s.yml` ↔ `k8s/flux/keycloak-sync.yaml` | Flux pulls from the OCI artifact this workflow publishes; they must reference the same GHCR repository. |
 | `docker-compose.yml` / `azure/main.bicep` / `k8s/keycloak.yaml` | The same `KC_DB*`/admin-bootstrap config shape must stay in parity across all three so behavior doesn't diverge by environment (see Project eidos above). |

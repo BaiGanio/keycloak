@@ -5,6 +5,7 @@ resources:
   - postgres.yaml
   - keycloak.yaml
   - ingress.yaml
+  - backup.yaml
 
 configMapGenerator:
   - name: realm-import
