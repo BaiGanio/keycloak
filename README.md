@@ -46,6 +46,9 @@ short on purpose — pick your scenario above and open its guide.
 | `docker-compose.yml` | Runs Keycloak with PostgreSQL for local development |
 | `DOCKER.md` | Local Docker instructions and troubleshooting |
 | `k8s/realm/baiganio-realm.json` | Canonical realm, clients, roles, and import placeholders |
+| `dev/realm/baiganio-dev-realm.json` | Local-only `baiganio-dev` realm with public test users and clients; never deployed |
+| `scripts/reset-dev-realm.sh` | Deletes and reloads only the local `baiganio-dev` realm |
+| `DEV_REALM.md` | Team note: how apps use the dev realm's test users and clients |
 | `azure/Dockerfile` | Azure-only wrapper image carrying the canonical realm file |
 | `azure/main.bicep` | Azure App Service and free-offer Azure SQL Database template |
 | `azure/main.bicepparam` | Sweden Central proof-of-concept parameters |

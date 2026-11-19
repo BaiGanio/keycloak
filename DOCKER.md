@@ -36,6 +36,11 @@ The committed realm is mounted read-only at
 The import creates the `baiganio` realm, its four clients, and the `bgapi-api`
 roles on a fresh database. Existing realms are skipped on restart.
 
+A second, local-only realm, `baiganio-dev`, is mounted next to it from
+`dev/realm/baiganio-dev-realm.json`. It has test users and clients with public
+passwords for app development, and it is never deployed. Reset only that realm
+with `./scripts/reset-dev-realm.sh`. See [`DEV_REALM.md`](DEV_REALM.md).
+
 ### Examine the imported configuration
 
 After `docker compose up -d`, verify the import and inspect the public realm

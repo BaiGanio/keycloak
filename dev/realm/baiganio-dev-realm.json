@@ -1,0 +1,273 @@
+{
+  "realm": "baiganio-dev",
+  "enabled": true,
+  "displayName": "BaiGanio DEV (local only)",
+  "registrationAllowed": false,
+  "rememberMe": true,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(8) and notUsername and notEmail and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "clients": [
+    {
+      "clientId": "bgapi-api",
+      "name": "bgapi resource API",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "bgapi-swagger",
+      "name": "bgapi Swagger UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ],
+      "redirectUris": ["https://localhost:44364/swagger/oauth2-redirect.html"],
+      "webOrigins": ["https://localhost:44364"],
+      "attributes": { "pkce.code.challenge.method": "S256" }
+    },
+    {
+      "clientId": "baiganio-web",
+      "name": "BaiGanio web",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ],
+      "redirectUris": ["http://localhost:4299/"],
+      "webOrigins": ["http://localhost:4299"],
+      "attributes": { "pkce.code.challenge.method": "S256" }
+    },
+    {
+      "clientId": "cosmic-origins-web",
+      "name": "Cosmic Origins web",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ],
+      "redirectUris": ["http://localhost:4300/"],
+      "webOrigins": ["http://localhost:4300"],
+      "attributes": { "pkce.code.challenge.method": "S256" }
+    },
+    {
+      "clientId": "dev-spa",
+      "name": "DEV any local browser app",
+      "description": "Local only. Browser login (PKCE) for any new app on common dev ports.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ],
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:4200/*",
+        "http://localhost:5173/*",
+        "http://localhost:8000/*"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:4200/*##http://localhost:5173/*##http://localhost:8000/*"
+      }
+    },
+    {
+      "clientId": "dev-cli",
+      "name": "DEV scripts and agents",
+      "description": "Local only. Password grant so scripts can get a token without a browser. Never copy this setting to the real realm.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "dev-service",
+      "name": "DEV machine-to-machine",
+      "description": "Local only. Client credentials grant for backend jobs. Secret is public on purpose.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-service-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "bgapi-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "bgapi-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev-admin",
+      "email": "dev-admin@example.com",
+      "firstName": "Dev",
+      "lastName": "Admin",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }],
+      "clientRoles": { "bgapi-api": ["admin"] }
+    },
+    {
+      "username": "dev-user",
+      "email": "dev-user@example.com",
+      "firstName": "Dev",
+      "lastName": "User",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }],
+      "clientRoles": { "bgapi-api": ["user"] }
+    },
+    {
+      "username": "dev-viewer",
+      "email": "dev-viewer@example.com",
+      "firstName": "Dev",
+      "lastName": "Viewer",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }],
+      "clientRoles": { "bgapi-api": ["viewer"] }
+    },
+    {
+      "username": "dev-norole",
+      "email": "dev-norole@example.com",
+      "firstName": "Dev",
+      "lastName": "NoRole",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }]
+    },
+    {
+      "username": "dev-unverified",
+      "email": "dev-unverified@example.com",
+      "firstName": "Dev",
+      "lastName": "Unverified",
+      "emailVerified": false,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }],
+      "clientRoles": { "bgapi-api": ["user"] }
+    },
+    {
+      "username": "dev-disabled",
+      "email": "dev-disabled@example.com",
+      "firstName": "Dev",
+      "lastName": "Disabled",
+      "emailVerified": true,
+      "enabled": false,
+      "credentials": [{ "type": "password", "value": "DevPass123!", "temporary": false }],
+      "clientRoles": { "bgapi-api": ["user"] }
+    },
+    {
+      "username": "service-account-dev-service",
+      "enabled": true,
+      "serviceAccountClientId": "dev-service",
+      "clientRoles": { "bgapi-api": ["user"] }
+    }
+  ],
+  "roles": {
+    "client": {
+      "bgapi-api": [
+        { "name": "admin", "description": "Full API access" },
+        { "name": "user", "description": "Standard API access" },
+        { "name": "viewer", "description": "Read-only API access" }
+      ]
+    }
+  },
+  "attributes": {
+    "frontendUrl": "http://localhost:8080"
+  }
+}

@@ -248,6 +248,7 @@ After a commit, push, or release, re-check this table and offer to update any st
 | Topic | File |
 |-------|------|
 | Local Docker setup | `DOCKER.md` |
+| Local-only dev realm (test users/clients) | `DEV_REALM.md` |
 | Azure deployment/ops | `AZURE.md` |
 | k3s / Raspberry Pi 5 / Flux GitOps | `K3SPI5.md` |
 | Cross-app architecture & trust boundaries | `ARCHITECTURE.md` |
