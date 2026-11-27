@@ -1,7 +1,8 @@
 # Brief: Cosmic Origins import client (keycloak)
 
-> Status: APPROVED 2026-11-24 (revised: no user accounts). Copied from baiganio-platform `plans/cosmic-origins/brief-keycloak.md`.
-> If the contract below must change, tell Lyuben: the master plan changes first.
+> Status: APPROVED 2026-11-24. Copied from baiganio-platform `plans/cosmic-origins/brief-keycloak.md`. Do not edit it here.
+> To change it, open an issue in `BaiGanio/baiganio-platform` (template "Change request").
+> Master plan: baiganio-platform `plans/cosmic-origins/README.md` (private).
 > This brief has all you need. You do not need the platform repo.
 
 ## Goal
