@@ -48,6 +48,7 @@ short on purpose — pick your scenario above and open its guide.
 | `k8s/realm/baiganio-realm.json` | Canonical realm, clients, roles, and import placeholders |
 | `dev/realm/baiganio-dev-realm.json` | Local-only `baiganio-dev` realm with public test users and clients; never deployed |
 | `scripts/reset-dev-realm.sh` | Deletes and reloads only the local `baiganio-dev` realm |
+| `scripts/migrate-cosmic-origins.sh` | Adds `cosmic-importer` and `cosmic-import` to an existing realm (safe to run twice) |
 | `DEV_REALM.md` | Team note: how apps use the dev realm's test users and clients |
 | `azure/Dockerfile` | Azure-only wrapper image carrying the canonical realm file |
 | `azure/main.bicep` | Azure App Service and free-offer Azure SQL Database template |
@@ -66,8 +67,10 @@ short on purpose — pick your scenario above and open its guide.
 
 All three environments import the committed [`baiganio` realm](k8s/realm/baiganio-realm.json)
 on first boot. `master` remains reserved for administration. The realm contains
-the `bgapi-api`, `bgapi-swagger`, `baiganio-web`, and `cosmic-origins-web`
-clients, plus the `admin`, `user`, and `viewer` roles on `bgapi-api`.
+the `bgapi-api`, `bgapi-swagger`, `baiganio-web`, `cosmic-origins-web`, and
+`cosmic-importer` clients, plus the `admin`, `user`, `viewer`, and `cosmic-import`
+roles on `bgapi-api`. `cosmic-importer` is a client-credentials client for the
+Cosmic Origins import script; only its service account has `cosmic-import`.
 
 Realm import is creation-only on startup: a restart skips an existing realm.
 Later realm changes require an explicit, reviewed migration; they are not
