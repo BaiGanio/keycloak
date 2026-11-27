@@ -355,8 +355,11 @@ curl --fail --silent \
   jq '[.[].name]'
 ```
 
-Expected clients are `bgapi-api`, `bgapi-swagger`, `baiganio-web`, and
-`cosmic-origins-web`; expected API roles are `admin`, `user`, and `viewer`.
+Expected clients are `bgapi-api`, `bgapi-swagger`, `baiganio-web`,
+`cosmic-origins-web`, and `cosmic-importer`; expected API roles are `admin`,
+`user`, `viewer`, and `cosmic-import`. A realm made before `cosmic-importer` was
+added does not have it yet: see
+[Add the Cosmic Origins import client to an already-existing realm](#add-the-cosmic-origins-import-client-to-an-already-existing-realm).
 
 ## Apply login-security settings to an already-existing realm
 
@@ -413,6 +416,47 @@ This change lives only in the Pi's database. If the realm is ever wiped and
 reimported later (Path A, or a full disaster restore), it comes back
 automatically, because the file already carries these settings — nothing
 further to do at that point.
+
+## Add the Cosmic Origins import client to an already-existing realm
+
+`k8s/realm/baiganio-realm.json` now carries the `cosmic-importer` client and
+the `cosmic-import` role on `bgapi-api`. The import script for Cosmic Origins
+uses this client to get a token without a person (client credentials). Only
+its service account has `cosmic-import`. Like the login-security settings
+above, this does not reach a realm that already exists on the Pi.
+
+Run the migration script on the Pi, from the root of this repo:
+
+```bash
+./scripts/migrate-cosmic-origins.sh
+# enter the Keycloak admin password when prompted
+```
+
+The script uses `sudo kubectl ... exec` into `deployment/keycloak` and runs
+`kcadm.sh` there. It is safe to run twice: each step checks first and changes
+only what is missing. Its last line shows the service account's `bgapi-api`
+roles. Expected: `cosmic-import` only.
+
+The script never sets a secret. Keycloak makes one. Read it in the admin
+console: realm `baiganio` → **Clients** → `cosmic-importer` → **Credentials**.
+Give it to the import script through its own secret store; never commit it.
+
+Check that the client works (paste the secret when prompted):
+
+```bash
+read -rsp 'cosmic-importer secret: ' COSMIC_IMPORTER_SECRET
+printf '\n'
+curl --fail --silent \
+  --data-urlencode 'client_id=cosmic-importer' \
+  --data-urlencode "client_secret=$COSMIC_IMPORTER_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  https://auth.baiganio.io/realms/baiganio/protocol/openid-connect/token |
+  jq -r '.access_token | split(".")[1] | gsub("-"; "+") | gsub("_"; "/") |
+    @base64d | fromjson | {aud, roles: .resource_access."bgapi-api".roles}'
+unset COSMIC_IMPORTER_SECRET
+```
+
+Expected: `"aud": "bgapi-api"` and `"roles": ["cosmic-import"]`.
 
 ## First architecture
 

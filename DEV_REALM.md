@@ -68,8 +68,16 @@ All users have the same password: **`DevPass123!`**
 | `dev-spa` | browser, PKCE | Any new browser app on port `3000`, `4200`, `5173`, or `8000` |
 | `dev-cli` | password login | Scripts, tests, and AI agents that need a token without a browser |
 | `dev-service` | client credentials | Server-to-server calls. Secret: `dev-service-secret`. Gets role `user`. |
+| `cosmic-importer` | client credentials | The Cosmic Origins import script. Secret: `cosmic-importer-secret`. Gets role `cosmic-import` only. |
 
 Every token carries `aud: bgapi-api`.
+
+Roles on `bgapi-api`: `admin`, `user`, `viewer`, and `cosmic-import`.
+Only `cosmic-importer` has `cosmic-import`. No test user has it. The role lets
+the import script write Cosmic Origins catalog data to BGAPI.
+
+In the real realm, `cosmic-importer` has no secret in git. Keycloak makes the
+secret. The admin reads it in the console.
 
 ## 5. Get a token from the command line
 

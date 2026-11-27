@@ -35,6 +35,12 @@ a client integration fast never outranks either of the first two.
 - **Communication style**: explain as you go. Some of this ground (Azure OIDC,
   k3s/Flux GitOps, Keycloak realm/client config) is newer territory — walk through
   the reasoning behind infra/security decisions, not just the diff.
+- **Platform contract.** This repo is part of the BaiGanio platform (BGAPI, Keycloak,
+  the websites). Files in `docs/briefs/` hold contracts other repos depend on:
+  endpoints, data shapes, roles, client IDs, URLs, CORS origins. If a change would
+  alter or break one, stop and tell Lyuben. The contract changes first in the
+  platform plan (baiganio-platform, private), then here. Never edit a brief to fit
+  your change.
 
 ## Quick Start
 
